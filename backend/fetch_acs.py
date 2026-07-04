@@ -90,5 +90,50 @@ def main():
     print("\nSample rows:")
     print(out.head())
 
+def fetch_acs_data(year: int, api_key: str) -> pd.DataFrame:
+    """Entry point called by main.py — supports dynamic year and api_key."""
+    import numpy as np
+
+    base_url = f"https://api.census.gov/data/{year}/acs/acs5"
+    frames = []
+    for fips, county_name in COUNTIES.items():
+        params = {
+            "get": "NAME," + ",".join(VARIABLES.keys()),
+            "for": "tract:*",
+            "in": f"state:{STATE} county:{fips}",
+            "key": api_key,
+        }
+        resp = requests.get(base_url, params=params)
+        resp.raise_for_status()
+        rows = resp.json()
+        frame = pd.DataFrame(rows[1:], columns=rows[0])
+        frame["county_label"] = county_name
+        frames.append(frame)
+
+    df = pd.concat(frames, ignore_index=True)
+    df = df.rename(columns=VARIABLES)
+
+    for col in VARIABLES.values():
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        df.loc[df[col] < 0, col] = np.nan
+
+    df["tract_id"]          = df["state"] + df["county"] + df["tract"]
+    df["pct_below_poverty"] = df["poverty_below"] / df["poverty_total"] * 100
+    df["pct_snap_enrollment"] = df["snap_yes"] / df["snap_total"] * 100
+    df["pct_no_vehicle"]    = (df["owner_no_veh"] + df["renter_no_veh"]) / df["veh_total"] * 100
+
+    # Columns expected by main.py that ACS5 doesn't supply — default to 0
+    for col in ["need_score", "pct_low_income", "pct_children_under18",
+                "pct_seniors_65plus", "unemployment_rate", "housing_cost_burden_pct"]:
+        df[col] = 0.0
+
+    return df[[
+        "tract_id", "county_label", "total_pop", "median_income",
+        "pct_below_poverty", "pct_snap_enrollment", "pct_no_vehicle",
+        "pct_low_income", "need_score", "pct_children_under18",
+        "pct_seniors_65plus", "unemployment_rate", "housing_cost_burden_pct",
+    ]].rename(columns={"county_label": "county", "total_pop": "population"})
+
+
 if __name__ == "__main__":
     main()
