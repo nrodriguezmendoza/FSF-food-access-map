@@ -12,6 +12,8 @@ frontend/dist/
 
 # Data & secrets
 data/raw/
+backend/geo/
+backend/tracts_2022.geojson
 
 # Backend
 backend/fsf_data.db
