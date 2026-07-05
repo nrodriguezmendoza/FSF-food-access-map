@@ -393,14 +393,20 @@ export default function HealthMap() {
       });
 
       normalizeTracts(geojson);
-      source.setData(geojson);
       geojsonRef.current = geojson;
+      source.setData(geojson);
 
-      applyWeights(weightsRef.current, geojson);
-      map.current.setPaintProperty("tracts-fill", "fill-opacity", [
-        "case", ["boolean", ["feature-state", "covered"], false], 0.35, 0.72,
-      ]);
-      recomputeGap(geojson, agenciesRef.current, radiusRef.current);
+      // Defer until MapLibre finishes rebuilding tiles from the new source data.
+      // setData processes asynchronously in a web worker; applying feature states
+      // before the tiles exist causes them to be silently dropped.
+      map.current.once("idle", () => {
+        if (!map.current) return;
+        applyWeights(weightsRef.current, geojson);
+        map.current.setPaintProperty("tracts-fill", "fill-opacity", [
+          "case", ["boolean", ["feature-state", "covered"], false], 0.35, 0.72,
+        ]);
+        recomputeGap(geojson, agenciesRef.current, radiusRef.current);
+      });
     } catch (e) { console.error("ACS load error", e); }
   }, [applyWeights, recomputeGap]);
 
