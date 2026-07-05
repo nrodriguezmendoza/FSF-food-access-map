@@ -84,29 +84,44 @@ function scoreColor(score) {
   return "#5ec962";
 }
 
-// Min-max normalize the raw ACS fields the weight sliders operate on.
+// Index of the right-most insertion point for x in a sorted array — i.e. the
+// count of values <= x. Used for percentile ranking.
+function bisectRight(sorted, x) {
+  let lo = 0, hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid] <= x) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+// Percentile-rank normalize the raw ACS fields the weight sliders operate on.
+// Each value becomes its fractional rank in [0,1] — "this tract is worse than X%
+// of tracts." This is the CDC Social Vulnerability Index approach: robust to
+// outliers (a single 100%-poverty group-quarters tract can't compress the scale)
+// and spreads scores evenly across the full range.
 // median_income is inverted — lower income means higher need.
 function normalizeTracts(geojson) {
   const fields = ["poverty_rate", "snap_rate", "no_vehicle_rate", "median_income"];
   const invert = new Set(["median_income"]);
-  const stats = {};
-  fields.forEach((f) => {
-    const vals = geojson.features
-      .map((x) => x.properties[f])
+  fields.forEach((field) => {
+    const sorted = geojson.features
+      .map((x) => x.properties[field])
       .filter((v) => v != null && !Number.isNaN(Number(v)))
-      .map(Number);
-    if (vals.length) stats[f] = { min: Math.min(...vals), max: Math.max(...vals) };
+      .map(Number)
+      .sort((a, b) => a - b);
+    const n = sorted.length;
+    geojson.features.forEach((f) => {
+      const v = f.properties[field];
+      if (v == null || Number.isNaN(Number(v)) || n === 0) { f.properties[field + "_norm"] = null; return; }
+      let rank = bisectRight(sorted, Number(v)) / n; // fraction of tracts <= this value
+      if (invert.has(field)) rank = 1 - rank;
+      f.properties[field + "_norm"] = rank;
+    });
   });
   geojson.features.forEach((f) => {
     const p = f.properties;
-    fields.forEach((field) => {
-      const v = p[field];
-      const s = stats[field];
-      if (v == null || !s || s.max === s.min) { p[field + "_norm"] = null; return; }
-      let norm = (Number(v) - s.min) / (s.max - s.min);
-      if (invert.has(field)) norm = 1 - norm;
-      p[field + "_norm"] = norm;
-    });
     p.food_desert_norm =
       p.food_desert === 1 || p.food_desert === "1" ? 1
       : p.food_desert === 0 || p.food_desert === "0" ? 0
@@ -402,9 +417,9 @@ export default function HealthMap() {
       map.current.once("idle", () => {
         if (!map.current) return;
         applyWeights(weightsRef.current, geojson);
-        map.current.setPaintProperty("tracts-fill", "fill-opacity", [
-          "case", ["boolean", ["feature-state", "covered"], false], 0.35, 0.72,
-        ]);
+        // Constant opacity — coverage is shown via the blue radius circles, so the
+        // choropleth colors stay stable when the radius slider changes.
+        map.current.setPaintProperty("tracts-fill", "fill-opacity", 0.72);
         recomputeGap(geojson, agenciesRef.current, radiusRef.current);
       });
     } catch (e) { console.error("ACS load error", e); }
