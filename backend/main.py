@@ -69,6 +69,14 @@ def safe_float(row, key, default=0.0):
         return default
 
 
+def _clean(v):
+    """Return None for NaN/Inf so JSON serialization doesn't blow up."""
+    import math
+    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+        return None
+    return v
+
+
 def safe_int(row, key, default=0):
     try:
         return int(float(row.get(key, default) or default))
@@ -214,17 +222,17 @@ def get_acs_tracts(acs_year: int = Query(2024), db: Session = Depends(get_db)):
             "tract_id":                r.tract_id,
             "neighborhood":            r.neighborhood,
             "county":                  r.county,
-            "need_score":              r.need_score,
-            "food_access_index":       r.food_access_index,
+            "need_score":              _clean(r.need_score),
+            "food_access_index":       _clean(r.food_access_index),
             "population":              r.population,
-            "median_income":           r.median_income,
-            "pct_below_poverty":       r.pct_below_poverty,
-            "pct_snap_enrollment":     r.pct_snap_enrollment,
-            "pct_no_vehicle":          r.pct_no_vehicle,
+            "median_income":           _clean(r.median_income),
+            "pct_below_poverty":       _clean(r.pct_below_poverty),
+            "pct_snap_enrollment":     _clean(r.pct_snap_enrollment),
+            "pct_no_vehicle":          _clean(r.pct_no_vehicle),
             "food_desert":             r.food_desert,
-            "supermarket_dist_mi":     r.supermarket_dist_mi,
-            "unemployment_rate":       r.unemployment_rate,
-            "housing_cost_burden_pct": r.housing_cost_burden_pct,
+            "supermarket_dist_mi":     _clean(r.supermarket_dist_mi),
+            "unemployment_rate":       _clean(r.unemployment_rate),
+            "housing_cost_burden_pct": _clean(r.housing_cost_burden_pct),
             "acs_year":                r.acs_year,
         }
         for r in records
