@@ -3,7 +3,7 @@ import TrendChart from "./TrendChart";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
-const API = import.meta.env.DEV ? "http://127.0.0.1:8000" : "";
+const API = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://127.0.0.1:8000" : "");
 
 const ACS_YEARS = [
   { value: 2024, label: "2020–2024 (Jan 2026) — Latest" },
