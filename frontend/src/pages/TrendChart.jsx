@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 
-const API = "http://127.0.0.1:8000";
+const API = import.meta.env.DEV ? "http://127.0.0.1:8000" : "";
 const COUNTIES = ["Miami-Dade", "Broward", "Palm Beach"];
 const COUNTY_COLORS = {
   "Miami-Dade": { line: "#E24B4A", bg: "#FCEBEB", text: "#A32D2D" },
