@@ -881,6 +881,15 @@ export default function HealthMap() {
   const fmt = (v, suffix = "") =>
     v === null || v === undefined || v === "" ? "—" : `${Number(v).toFixed(1)}${suffix}`;
 
+  // Prefer merged ACS props from geojsonRef over the stale click-event snapshot;
+  // prefer pre-computed score from scoresRef so weight/data changes reflect instantly.
+  const selectedProps = selected
+    ? (geojsonRef.current?.features?.find(f => f.properties.GEOID === selected.GEOID)?.properties ?? selected)
+    : null;
+  const selectedNeedScore = selected
+    ? (scoresRef.current[selected.GEOID] ?? computeScore(selectedProps, weights))
+    : null;
+
   const legendTitle = activeLayer === "need" ? "Need score" : "Impact score";
   const legendSrc   = activeLayer === "need"
     ? `ACS ${ACS_YEARS.find(y => y.value === acsYear)?.label || acsYear}`
@@ -1367,7 +1376,7 @@ export default function HealthMap() {
         {showTrend && <TrendChart onClose={() => setShowTrend(false)} />}
 
         {/* ── Tract Sidebar ── */}
-        {selected && !uploadOpen && (
+        {selectedProps && !uploadOpen && (
           <div style={{
             position: "absolute", top: 0, right: 0, bottom: 0, width: 300,
             background: "#fff", boxShadow: "-2px 0 8px rgba(0,0,0,0.12)",
@@ -1379,38 +1388,38 @@ export default function HealthMap() {
             {activeLayer === "need" ? (
               <>
                 <h2 style={{ margin: "0 0 3px", fontSize: 17, fontWeight: 600 }}>
-                  Need score: {fmt(computeScore(selected, weights))}
+                  Need score: {fmt(selectedNeedScore)}
                 </h2>
                 <p style={{ margin: "0 0 18px", color: "#888", fontSize: 12 }}>
-                  {selected.county_name} County · Tract {selected.GEOID}
+                  {selectedProps.county_name} County · Tract {selectedProps.GEOID}
                 </p>
-                <Stat label="Population"          value={selected.total_pop ? Number(selected.total_pop).toLocaleString() : "—"} note={`ACS ${acsYear}`} />
-                <Stat label="Below poverty"       value={fmt(selected.poverty_rate, "%")}       note="vs ~13% nationally" />
-                <Stat label="Receiving SNAP"      value={fmt(selected.snap_rate, "%")}           note="of households" />
-                <Stat label="No vehicle"          value={fmt(selected.no_vehicle_rate, "%")}     note="of households" />
-                <Stat label="Unemployment"        value={fmt(selected.unemployment_rate, "%")}   note="of labor force" />
-                <Stat label="Housing cost burden" value={fmt(selected.housing_cost_burden, "%")} note="spending >30% on housing" />
+                <Stat label="Population"          value={selectedProps.total_pop ? Number(selectedProps.total_pop).toLocaleString() : "—"} note={`ACS ${acsYear}`} />
+                <Stat label="Below poverty"       value={fmt(selectedProps.poverty_rate, "%")}       note="vs ~13% nationally" />
+                <Stat label="Receiving SNAP"      value={fmt(selectedProps.snap_rate, "%")}           note="of households" />
+                <Stat label="No vehicle"          value={fmt(selectedProps.no_vehicle_rate, "%")}     note="of households" />
+                <Stat label="Unemployment"        value={fmt(selectedProps.unemployment_rate, "%")}   note="of labor force" />
+                <Stat label="Housing cost burden" value={fmt(selectedProps.housing_cost_burden, "%")} note="spending >30% on housing" />
                 <Stat label="Food desert"
-                  value={selected.food_desert === 1 || selected.food_desert === "1" ? "Yes" : selected.food_desert === 0 || selected.food_desert === "0" ? "No" : "—"}
+                  value={selectedProps.food_desert === 1 || selectedProps.food_desert === "1" ? "Yes" : selectedProps.food_desert === 0 || selectedProps.food_desert === "0" ? "No" : "—"}
                   note="USDA 2019" />
                 <Stat label="Nearest supermarket"
-                  value={selected.supermarket_dist_mi ? `${Number(selected.supermarket_dist_mi).toFixed(1)} mi` : "—"}
+                  value={selectedProps.supermarket_dist_mi ? `${Number(selectedProps.supermarket_dist_mi).toFixed(1)} mi` : "—"}
                   note="distance to nearest store" />
                 <Stat label="Median income"
-                  value={selected.median_income ? `$${Math.round(selected.median_income).toLocaleString()}` : "—"}
+                  value={selectedProps.median_income ? `$${Math.round(selectedProps.median_income).toLocaleString()}` : "—"}
                   note="household, per year" />
               </>
             ) : (
               <>
                 <h2 style={{ margin: "0 0 3px", fontSize: 17, fontWeight: 600, color: "#185FA5" }}>
-                  Impact score: {fmt(selected.impact_score)}
+                  Impact score: {fmt(selectedProps.impact_score)}
                 </h2>
                 <p style={{ margin: "0 0 18px", color: "#888", fontSize: 12 }}>
-                  {selected.county_name} County · FSF {fsfYear}
+                  {selectedProps.county_name} County · FSF {fsfYear}
                 </p>
-                <Stat label="Meals served"        value={selected.meals_served       ? Number(selected.meals_served).toLocaleString()       : "—"} note="total meals (annual)" />
-                <Stat label="Individuals served"  value={selected.individuals_served ? Number(selected.individuals_served).toLocaleString() : "—"} note="people reached" />
-                <Stat label="Households served"   value={selected.households_served  ? Number(selected.households_served).toLocaleString()  : "—"} note="family units" />
+                <Stat label="Meals served"        value={selectedProps.meals_served       ? Number(selectedProps.meals_served).toLocaleString()       : "—"} note="total meals (annual)" />
+                <Stat label="Individuals served"  value={selectedProps.individuals_served ? Number(selectedProps.individuals_served).toLocaleString() : "—"} note="people reached" />
+                <Stat label="Households served"   value={selectedProps.households_served  ? Number(selectedProps.households_served).toLocaleString()  : "—"} note="family units" />
               </>
             )}
           </div>
