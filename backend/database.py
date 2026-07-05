@@ -9,10 +9,27 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./fsf_data.db")
 
-# connect_args only needed for SQLite
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+if DATABASE_URL.startswith("sqlite"):
+    connect_args = {"check_same_thread": False}
+    engine = create_engine(DATABASE_URL, connect_args=connect_args)
+elif DATABASE_URL.startswith("postgres"):
+    # Normalize: plain `postgresql://` or `postgres://` → `postgresql+psycopg://`
+    # (psycopg3 is installed; psycopg2 is not)
+    for old, new in [
+        ("postgresql+psycopg2://", "postgresql+psycopg://"),
+        ("postgresql://",          "postgresql+psycopg://"),
+        ("postgres://",            "postgresql+psycopg://"),
+    ]:
+        if DATABASE_URL.startswith(old):
+            DATABASE_URL = DATABASE_URL.replace(old, new, 1)
+            break
+    # Supabase requires SSL; add sslmode if absent
+    if "sslmode" not in DATABASE_URL:
+        sep = "&" if "?" in DATABASE_URL else "?"
+        DATABASE_URL = DATABASE_URL + sep + "sslmode=require"
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
+else:
+    engine = create_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

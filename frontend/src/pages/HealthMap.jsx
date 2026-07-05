@@ -380,13 +380,13 @@ export default function HealthMap() {
           f.properties.median_income        = m.median_income;
           f.properties.total_pop            = m.population;
           f.properties.county_name          = m.county;
-          f.properties.poverty_rate         = m.pct_below_poverty        ? +(m.pct_below_poverty    * 100).toFixed(1) : null;
-          f.properties.snap_rate            = m.pct_snap_enrollment      ? +(m.pct_snap_enrollment  * 100).toFixed(1) : null;
-          f.properties.no_vehicle_rate      = m.pct_no_vehicle           ? +(m.pct_no_vehicle       * 100).toFixed(1) : null;
+          f.properties.poverty_rate         = m.pct_below_poverty        != null ? +Number(m.pct_below_poverty).toFixed(1)        : null;
+          f.properties.snap_rate            = m.pct_snap_enrollment      != null ? +Number(m.pct_snap_enrollment).toFixed(1)      : null;
+          f.properties.no_vehicle_rate      = m.pct_no_vehicle           != null ? +Number(m.pct_no_vehicle).toFixed(1)           : null;
           f.properties.food_desert          = m.food_desert;
           f.properties.supermarket_dist_mi  = m.supermarket_dist_mi;
-          f.properties.unemployment_rate    = m.unemployment_rate        ? +(m.unemployment_rate    * 100).toFixed(1) : null;
-          f.properties.housing_cost_burden  = m.housing_cost_burden_pct  ? +(m.housing_cost_burden_pct * 100).toFixed(1) : null;
+          f.properties.unemployment_rate    = m.unemployment_rate        != null ? +Number(m.unemployment_rate).toFixed(1)        : null;
+          f.properties.housing_cost_burden  = m.housing_cost_burden_pct  != null ? +Number(m.housing_cost_burden_pct).toFixed(1) : null;
         } else {
           f.properties.need_score = null;
         }

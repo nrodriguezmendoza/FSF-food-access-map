@@ -23,3 +23,5 @@ backend/fsf_data.db
 .vscode/*
 !.vscode/extensions.json
 Thumbs.db
+.vercel
+.env*
