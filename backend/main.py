@@ -1,7 +1,8 @@
 import os
 import io
 import threading
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query, BackgroundTasks
+from datetime import datetime
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import pandas as pd
@@ -9,49 +10,39 @@ from dotenv import load_dotenv
 
 from database import (
     SessionLocal, engine, Base,
-    ACSRecord, UploadBatch,
+    ACSRecord, UploadBatch, AcsFetchJob,
     FSFDistribution, FSFUploadBatch,
 )
+import scoring
+import food_desert
 
 load_dotenv()
 Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
+# ACS 5-year vintages before 2020 use 2010-vintage tract boundaries, which do
+# not join the 2020-based tracts_2022.geojson the frontend renders. Restrict to
+# years that share the 2020 boundary set.
+MIN_ACS_YEAR = 2020
+MAX_ACS_YEAR = 2025
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    # Any localhost/127.0.0.1 port (local dev on any Vite port) + Vercel deploys.
+    allow_origin_regex=r"https://.*\.vercel\.app|http://(localhost|127\.0\.0\.1):\d+",
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── In-progress ACS fetch tracker ─────────────────────────────────────────────
-acs_fetch_status: dict = {}
-
-# ── ZIP population lookup ──────────────────────────────────────────────────────
-ZIP_POPULATION = {
-    "33054":28000,"33055":32000,"33056":34000,"33127":19000,"33128":15000,
-    "33130":21000,"33132":14000,"33135":24000,"33136":18000,"33142":27000,
-    "33147":31000,"33150":22000,"33161":29000,"33162":31000,"33169":38000,
-    "33125":22000,"33126":31000,"33133":18000,"33134":20000,"33138":19000,
-    "33149":12000,"33155":29000,"33165":33000,"33166":28000,"33174":26000,
-    "33175":35000,"33177":38000,"33178":41000,"33179":32000,"33180":28000,
-    "33311":35000,"33312":42000,"33313":39000,"33314":28000,"33315":18000,
-    "33316":12000,"33317":44000,"33319":37000,"33322":46000,"33324":41000,
-    "33325":38000,"33328":43000,"33060":38000,"33062":29000,"33063":44000,
-    "33064":36000,"33065":42000,"33068":38000,"33069":31000,"33071":40000,
-    "33073":35000,"33076":28000,"33309":32000,"33334":29000,"33351":36000,
-    "33388":18000,"33441":31000,"33442":28000,"33444":22000,"33445":24000,
-    "33409":28000,"33430":18000,"33435":24000,"33460":21000,"33461":32000,
-    "33462":27000,"33463":35000,"33467":41000,"33472":29000,"33484":31000,
-    "33401":28000,"33403":18000,"33404":22000,"33405":19000,"33406":31000,
-    "33407":24000,"33408":21000,"33410":38000,"33411":42000,"33412":19000,
-    "33413":36000,"33414":31000,"33415":38000,"33417":29000,"33418":44000,
-    "33426":24000,"33428":31000,"33431":28000,"33432":32000,"33433":36000,
-    "33040":24000,"33050":11000,"33001":8000,"33036":9000,"33037":14000,
-    "33042":7000,"33043":6000,"33044":5000,"33045":4000,"33051":6000,
-}
-DEFAULT_ZIP_POP = 25000
+def _set_fetch_job(db: Session, year: int, status: str, message: str = "", tracts: int = 0):
+    """Upsert the DB-backed fetch-status row (survives restarts / multi-worker)."""
+    job = db.query(AcsFetchJob).filter(AcsFetchJob.acs_year == year).first()
+    if not job:
+        job = AcsFetchJob(acs_year=year)
+        db.add(job)
+    job.status, job.message, job.tracts = status, message, tracts
+    job.updated_at = datetime.utcnow()
+    db.commit()
 
 
 def get_db():
@@ -95,116 +86,125 @@ def health():
 # ════════════════════════════════════════════════════════════════════════════════
 
 def _do_acs_fetch(year: int):
-    acs_fetch_status[year] = {"status": "fetching", "message": f"Fetching ACS {year} from Census Bureau..."}
+    db = SessionLocal()
     try:
+        _set_fetch_job(db, year, "fetching", f"Fetching ACS {year} from Census Bureau...")
+
         api_key = os.getenv("CENSUS_API_KEY", "")
         from fetch_acs import fetch_acs_data
         df = fetch_acs_data(year=year, api_key=api_key)
 
-        db = SessionLocal()
-        try:
-            db.query(UploadBatch).filter(
-                UploadBatch.status == "active",
-                UploadBatch.acs_year == year,
-            ).update({"status": "archived"})
+        # Attach the static USDA food-desert flag, then compute a REAL need_score
+        # (percentile-rank weighted avg incl. food_desert) — not a placeholder 0.
+        flags = food_desert.load_flags()
+        df["tract_id"] = df["tract_id"].astype(str)
+        df["food_desert"] = df["tract_id"].map(lambda t: flags.get(t, 0)).astype(int)
+        df["need_score"] = scoring.compute_need_scores(df)
 
-            batch = UploadBatch(
-                filename=f"census_api_acs5_{year}.csv",
-                uploaded_by="census_api",
-                row_count=len(df),
-                status="active",
-                acs_year=year,
-            )
-            db.add(batch)
-            db.commit()
-            db.refresh(batch)
+        # Build all records up front, then bulk-insert in one round trip.
+        mappings = []
+        for row in df.to_dict("records"):
+            ns = row.get("need_score")
+            ns = None if ns is None or (isinstance(ns, float) and pd.isna(ns)) else float(ns)
+            mappings.append(dict(
+                tract_id                = str(row.get("tract_id", "")),
+                neighborhood            = "",
+                county                  = str(row.get("county", "")),
+                need_score              = ns,
+                food_access_index       = ns,
+                population              = safe_int(row, "population"),
+                median_income           = safe_float(row, "median_income"),
+                pct_below_poverty       = safe_float(row, "pct_below_poverty"),
+                pct_snap_enrollment     = safe_float(row, "pct_snap_enrollment"),
+                pct_no_vehicle          = safe_float(row, "pct_no_vehicle"),
+                pct_low_income          = safe_float(row, "pct_low_income"),
+                food_desert             = int(row.get("food_desert", 0) or 0),
+                pct_children_under18    = safe_float(row, "pct_children_under18"),
+                pct_seniors_65plus      = safe_float(row, "pct_seniors_65plus"),
+                unemployment_rate       = safe_float(row, "unemployment_rate"),
+                housing_cost_burden_pct = safe_float(row, "housing_cost_burden_pct"),
+                acs_year                = year,
+            ))
 
-            for _, row in df.iterrows():
-                record = ACSRecord(
-                    tract_id                = str(row.get("tract_id", "")),
-                    neighborhood            = "",
-                    county                  = str(row.get("county", "")),
-                    latitude                = None,
-                    longitude               = None,
-                    need_score              = safe_float(row, "need_score"),
-                    food_access_index       = safe_float(row, "need_score"),
-                    population              = safe_int(row, "population"),
-                    median_income           = safe_float(row, "median_income"),
-                    pct_below_poverty       = safe_float(row, "pct_below_poverty"),
-                    pct_snap_enrollment     = safe_float(row, "pct_snap_enrollment"),
-                    pct_no_vehicle          = safe_float(row, "pct_no_vehicle"),
-                    pct_low_income          = safe_float(row, "pct_low_income"),
-                    food_desert             = 0,
-                    supermarket_dist_mi     = None,
-                    pct_children_under18    = safe_float(row, "pct_children_under18"),
-                    pct_seniors_65plus      = safe_float(row, "pct_seniors_65plus"),
-                    unemployment_rate       = safe_float(row, "unemployment_rate"),
-                    housing_cost_burden_pct = safe_float(row, "housing_cost_burden_pct"),
-                    acs_year                = year,
-                    upload_batch_id         = batch.id,
-                )
-                db.add(record)
+        # Safe ordering: create + fully populate the new batch FIRST, commit,
+        # THEN archive the prior active batch. A failure before this commit
+        # leaves the previous active batch untouched (see except: rollback).
+        batch = UploadBatch(
+            filename=f"census_api_acs5_{year}.csv",
+            uploaded_by="census_api",
+            row_count=len(df),
+            status="pending",
+            acs_year=year,
+        )
+        db.add(batch)
+        db.flush()  # assign batch.id without committing
+        for m in mappings:
+            m["upload_batch_id"] = batch.id
+        db.bulk_insert_mappings(ACSRecord, mappings)
+        db.commit()
 
-            db.commit()
-            acs_fetch_status[year] = {
-                "status": "done",
-                "message": f"ACS {year} loaded — {len(df)} tracts",
-                "tracts": len(df),
-            }
-        finally:
-            db.close()
+        # New batch is safely written — now swap it in atomically.
+        db.query(UploadBatch).filter(
+            UploadBatch.status == "active",
+            UploadBatch.acs_year == year,
+            UploadBatch.id != batch.id,
+        ).update({"status": "archived"})
+        batch.status = "active"
+        db.commit()
 
+        _set_fetch_job(db, year, "done", f"ACS {year} loaded — {len(df)} tracts", len(df))
     except Exception as e:
-        acs_fetch_status[year] = {"status": "error", "message": str(e)}
+        db.rollback()
+        _set_fetch_job(db, year, "error", str(e))
+    finally:
+        db.close()
 
 
 @app.post("/api/acs/fetch")
-def trigger_acs_fetch(acs_year: int = Query(2024)):
+def trigger_acs_fetch(acs_year: int = Query(2024), db: Session = Depends(get_db)):
     api_key = os.getenv("CENSUS_API_KEY", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="CENSUS_API_KEY not set in backend/.env")
 
-    if acs_year not in range(2019, 2026):
-        raise HTTPException(status_code=400, detail="Year must be between 2019 and 2025")
+    if not (MIN_ACS_YEAR <= acs_year <= MAX_ACS_YEAR):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Year must be between {MIN_ACS_YEAR} and {MAX_ACS_YEAR} "
+                   f"(earlier ACS vintages use 2010 tract boundaries that don't match the map)",
+        )
 
-    if acs_fetch_status.get(acs_year, {}).get("status") == "fetching":
+    job = db.query(AcsFetchJob).filter(AcsFetchJob.acs_year == acs_year).first()
+    if job and job.status == "fetching":
         return {"message": f"Already fetching ACS {acs_year}...", "cached": False}
 
-    db = SessionLocal()
     existing = db.query(UploadBatch).filter(
         UploadBatch.acs_year == acs_year,
         UploadBatch.status == "active",
     ).first()
-    db.close()
-
     if existing:
-        acs_fetch_status[acs_year] = {
-            "status": "done",
-            "message": f"ACS {acs_year} already loaded",
-            "tracts": existing.row_count,
-        }
+        _set_fetch_job(db, acs_year, "done", f"ACS {acs_year} already loaded", existing.row_count or 0)
         return {"message": f"ACS {acs_year} already in database", "cached": True, "tracts": existing.row_count or 0}
 
-    acs_fetch_status[acs_year] = {"status": "fetching", "message": "Starting..."}
+    _set_fetch_job(db, acs_year, "fetching", "Starting...")
     t = threading.Thread(target=_do_acs_fetch, args=(acs_year,), daemon=True)
     t.start()
     return {"message": f"Fetching ACS {acs_year} in background...", "cached": False}
 
 
 @app.get("/api/acs/fetch-status")
-def get_acs_fetch_status(acs_year: int = Query(2024)):
-    status = acs_fetch_status.get(acs_year)
-    if not status:
-        db = SessionLocal()
-        existing = db.query(UploadBatch).filter(
-            UploadBatch.acs_year == acs_year,
-            UploadBatch.status == "active",
-        ).first()
-        db.close()
-        if existing:
-            return {"status": "done", "message": f"ACS {acs_year} loaded", "tracts": existing.row_count or 0}
-        return {"status": "not_started", "message": f"ACS {acs_year} not yet fetched", "tracts": 0}
-    return status
+def get_acs_fetch_status(acs_year: int = Query(2024), db: Session = Depends(get_db)):
+    job = db.query(AcsFetchJob).filter(AcsFetchJob.acs_year == acs_year).first()
+    if job and job.status:
+        return {"status": job.status, "message": job.message, "tracts": job.tracts or 0}
+
+    # No job row yet — fall back to whether an active batch exists.
+    existing = db.query(UploadBatch).filter(
+        UploadBatch.acs_year == acs_year,
+        UploadBatch.status == "active",
+    ).first()
+    if existing:
+        return {"status": "done", "message": f"ACS {acs_year} loaded", "tracts": existing.row_count or 0}
+    return {"status": "not_started", "message": f"ACS {acs_year} not yet fetched", "tracts": 0}
 
 
 @app.get("/api/acs/tracts")
@@ -298,37 +298,16 @@ async def upload_fsf_csv(
     if missing:
         raise HTTPException(status_code=400, detail=f"Missing required columns: {', '.join(sorted(missing))}")
 
-    # Archive previous active batch for this year
-    db.query(FSFUploadBatch).filter(
-        FSFUploadBatch.status == "active",
-        FSFUploadBatch.dist_year == dist_year,
-    ).update({"status": "archived"})
-
-    batch = FSFUploadBatch(
-        filename=file.filename,
-        uploaded_by=uploaded_by,
-        row_count=len(df),
-        dist_year=dist_year,
-        status="active",
-    )
-    db.add(batch)
-    db.commit()
-    db.refresh(batch)
-
-    for _, row in df.iterrows():
-        zip_code   = str(row.get("zip_code", "")).strip().zfill(5)
+    # Build honest per-ZIP records. The per-row impact_score reflects that single
+    # ZIP; the county rollup is derived on demand by /api/fsf/county-summary,
+    # which is the ONE place the county score is computed.
+    mappings = []
+    for row in df.to_dict("records"):
+        zip_code   = scoring.normalize_zip(row.get("zip_code", ""))
         ind_served = safe_int(row, "individuals_served")
         meals      = safe_int(row, "meals_served")
-        zip_pop    = ZIP_POPULATION.get(zip_code, DEFAULT_ZIP_POP)
-
-        # Impact score (0-100) calibrated to realistic FSF monthly data:
-        # Population reach (60%):  benchmark = 5% of ZIP pop per month → score of 60
-        # Meals per capita (40%):  benchmark = 5 meals/person/month    → score of 40
-        pop_pct      = min((ind_served / zip_pop) / 0.05, 1.0) * 60
-        meals_score  = min((meals / max(ind_served, 1)) / 5.0, 1.0) * 40
-        acc_score    = round(pop_pct + meals_score, 1)
-
-        record = FSFDistribution(
+        zip_pop    = scoring.zip_population(zip_code)
+        mappings.append(dict(
             zip_code            = zip_code,
             county              = str(row.get("county", "")),
             households_served   = safe_int(row, "households_served"),
@@ -336,50 +315,82 @@ async def upload_fsf_csv(
             meals_served        = meals,
             month               = str(row.get("month", "")),
             dist_year           = dist_year,
-            impact_score= acc_score,
-            upload_batch_id     = batch.id,
+            impact_score        = scoring.impact_score(ind_served, meals, zip_pop),
+        ))
+
+    try:
+        # Safe ordering: fully write the new batch first, commit, THEN archive
+        # the prior active batch. A failure mid-write rolls back and leaves the
+        # existing active batch intact.
+        batch = FSFUploadBatch(
+            filename=file.filename,
+            uploaded_by=uploaded_by,
+            row_count=len(df),
+            dist_year=dist_year,
+            status="pending",
         )
-        db.add(record)
+        db.add(batch)
+        db.flush()
+        for m in mappings:
+            m["upload_batch_id"] = batch.id
+        db.bulk_insert_mappings(FSFDistribution, mappings)
+        db.commit()
 
-    db.commit()
+        db.query(FSFUploadBatch).filter(
+            FSFUploadBatch.status == "active",
+            FSFUploadBatch.dist_year == dist_year,
+            FSFUploadBatch.id != batch.id,
+        ).update({"status": "archived"})
+        batch.status = "active"
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Upload failed, no data changed: {e}")
 
-    # Recalculate county-level impact scores from aggregated totals
-    FIPS_COUNTY = {"12086":"Miami-Dade","12011":"Broward","12099":"Palm Beach","12087":"Monroe"}
-    county_agg = {}
-    for _, row in df.iterrows():
-        c = str(row.get("county","")).strip()
-        n = c.lower()
-        if "miami" in n or "dade" in n:   key = "Miami-Dade"
-        elif "broward" in n:               key = "Broward"
-        elif "palm" in n:                  key = "Palm Beach"
-        else: continue
-        z   = str(row.get("zip_code","")).zfill(5)
-        ind = safe_int(row, "individuals_served")
-        mls = safe_int(row, "meals_served")
-        pop = ZIP_POPULATION.get(z, DEFAULT_ZIP_POP)
-        if key not in county_agg:
-            county_agg[key] = {"ind":0,"meals":0,"pop":0,"count":0}
-        county_agg[key]["ind"]   += ind
-        county_agg[key]["meals"] += mls
-        county_agg[key]["pop"]   += pop
-        county_agg[key]["count"] += 1
-
-    # Update all rows for each county with the county-level score
-    for county, agg in county_agg.items():
-        if agg["count"] == 0: continue
-        avg_ind   = agg["ind"]   / agg["count"]
-        avg_meals = agg["meals"] / agg["count"]
-        avg_pop   = agg["pop"]   / agg["count"]
-        pop_pct     = min((avg_ind / avg_pop) / 0.05, 1.0) * 60
-        meals_score = min((avg_meals / max(avg_ind, 1)) / 5.0, 1.0) * 40
-        county_score = round(pop_pct + meals_score, 1)
-        db.query(FSFDistribution).filter(
-            FSFDistribution.upload_batch_id == batch.id,
-            FSFDistribution.county == county,
-        ).update({"impact_score": county_score})
-
-    db.commit()
     return {"message": "Upload successful", "batch_id": batch.id, "rows_imported": len(df), "year": dist_year}
+
+
+@app.get("/api/fsf/county-summary")
+def get_fsf_county_summary(dist_year: int = Query(...), db: Session = Depends(get_db)):
+    """Per-county rollup with impact_score computed ONCE, server-side. The map
+    and trend chart consume this instead of re-deriving the score client-side.
+
+    impact_score(sum_ind, sum_meals, sum_pop) is identical to the old
+    average-based county formula, since the per-ZIP counts cancel.
+    """
+    batch = db.query(FSFUploadBatch).filter(
+        FSFUploadBatch.status == "active",
+        FSFUploadBatch.dist_year == dist_year,
+    ).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail=f"No FSF data uploaded for {dist_year}")
+
+    records = db.query(FSFDistribution).filter(FSFDistribution.upload_batch_id == batch.id).all()
+
+    agg: dict[str, dict] = {}
+    for r in records:
+        county = scoring.normalize_county(r.county)
+        if not county:
+            continue
+        a = agg.setdefault(county, {"households_served": 0, "individuals_served": 0,
+                                    "meals_served": 0, "population": 0})
+        a["households_served"]  += r.households_served or 0
+        a["individuals_served"] += r.individuals_served or 0
+        a["meals_served"]       += r.meals_served or 0
+        a["population"]         += scoring.zip_population(r.zip_code)
+
+    return [
+        {
+            "county":             county,
+            "dist_year":          dist_year,
+            "households_served":  a["households_served"],
+            "individuals_served": a["individuals_served"],
+            "meals_served":       a["meals_served"],
+            "impact_score":       scoring.impact_score(
+                a["individuals_served"], a["meals_served"], a["population"]),
+        }
+        for county, a in agg.items()
+    ]
 
 
 @app.get("/api/fsf/distributions")
