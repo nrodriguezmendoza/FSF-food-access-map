@@ -35,6 +35,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+from sqlalchemy import Index
+
+
 # ── ACS Need Score Records ─────────────────────────────────────────────────────
 class ACSRecord(Base):
     __tablename__ = "acs_records"
@@ -59,7 +62,12 @@ class ACSRecord(Base):
     unemployment_rate       = Column(Float)
     housing_cost_burden_pct = Column(Float)
     acs_year                = Column(Integer)
-    upload_batch_id         = Column(Integer)
+    upload_batch_id         = Column(Integer, index=True)
+
+    # Read endpoints filter on upload_batch_id; keep the tract lookup composite.
+    __table_args__ = (
+        Index("ix_acs_batch_tract", "upload_batch_id", "tract_id"),
+    )
 
 
 # ── ACS Upload Batches ─────────────────────────────────────────────────────────
@@ -73,6 +81,21 @@ class UploadBatch(Base):
     status      = Column(String)   # "active" | "archived"
     acs_year    = Column(Integer)
 
+    # Every batch query filters on (status, acs_year).
+    __table_args__ = (
+        Index("ix_acs_batch_status_year", "status", "acs_year"),
+    )
+
+
+# ── ACS fetch job status (DB-backed so it survives restarts & multi-worker) ────
+class AcsFetchJob(Base):
+    __tablename__ = "acs_fetch_jobs"
+    acs_year   = Column(Integer, primary_key=True)   # one job row per year
+    status     = Column(String)                      # fetching | done | error
+    message    = Column(String)
+    tracts     = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
 
 # ── FSF Distribution Records (Accomplishment Score) ────────────────────────────
 class FSFDistribution(Base):
@@ -85,8 +108,8 @@ class FSFDistribution(Base):
     meals_served        = Column(Float)
     month               = Column(String)
     dist_year           = Column(Integer)
-    impact_score= Column(Float)
-    upload_batch_id     = Column(Integer)
+    impact_score        = Column(Float)
+    upload_batch_id     = Column(Integer, index=True)
 
 
 # ── FSF Distribution Upload Batches ───────────────────────────────────────────
@@ -99,3 +122,7 @@ class FSFUploadBatch(Base):
     row_count   = Column(Integer)
     dist_year   = Column(Integer)
     status      = Column(String)   # "active" | "archived"
+
+    __table_args__ = (
+        Index("ix_fsf_batch_status_year", "status", "dist_year"),
+    )

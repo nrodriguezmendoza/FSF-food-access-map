@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import TrendChart from "./TrendChart";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { countyFromGeoid } from "../lib/counties";
 
 const API = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://127.0.0.1:8000" : "");
 
@@ -21,19 +22,23 @@ const ACC_LEGEND = [
 ];
 
 const DEFAULT_WEIGHTS = {
-  poverty_rate: 30,
-  snap_rate: 20,
-  no_vehicle_rate: 15,
-  median_income: 15,
-  food_desert: 20,
+  poverty_rate: 25,
+  snap_rate: 15,
+  food_desert: 18,
+  no_vehicle_rate: 12,
+  median_income: 10,
+  unemployment_rate: 10,
+  housing_cost_burden: 10,
 };
 
 const LABELS = {
   poverty_rate: "Poverty rate",
   snap_rate: "SNAP enrollment",
+  food_desert: "Food desert",
   no_vehicle_rate: "No vehicle access",
   median_income: "Low income",
-  food_desert: "Food desert",
+  unemployment_rate: "Unemployment",
+  housing_cost_burden: "Housing cost burden",
 };
 
 // ── Gap-analysis & weighted-scoring helpers (ported from the pre-refactor App.jsx) ──
@@ -103,7 +108,8 @@ function bisectRight(sorted, x) {
 // and spreads scores evenly across the full range.
 // median_income is inverted — lower income means higher need.
 function normalizeTracts(geojson) {
-  const fields = ["poverty_rate", "snap_rate", "no_vehicle_rate", "median_income"];
+  const fields = ["poverty_rate", "snap_rate", "no_vehicle_rate", "median_income",
+                  "unemployment_rate", "housing_cost_burden"];
   const invert = new Set(["median_income"]);
   fields.forEach((field) => {
     const sorted = geojson.features
@@ -227,6 +233,15 @@ export default function HealthMap() {
   // ── Toast
   const [toast,          setToast]          = useState("");
 
+  // ── First-load intro (shown once per device; reopenable via header "?")
+  const [showIntro, setShowIntro] = useState(() => {
+    try { return !localStorage.getItem("fsf_intro_seen"); } catch { return true; }
+  });
+  const closeIntro = () => {
+    try { localStorage.setItem("fsf_intro_seen", "1"); } catch { /* private mode */ }
+    setShowIntro(false);
+  };
+
   // ── Weight sliders (Need score view only)
   const [weights,        setWeights]        = useState(DEFAULT_WEIGHTS);
   const [showSettings,   setShowSettings]   = useState(false);
@@ -235,6 +250,40 @@ export default function HealthMap() {
   // ── Coverage gap analysis (Need score view only)
   const [radius,         setRadius]         = useState(2);
   const [gapTracts,      setGapTracts]      = useState([]);
+
+  // ── Resizable / closable side panels
+  const [gapWidth,       setGapWidth]       = useState(300); // left coverage-gaps sidebar
+  const [needWidth,      setNeedWidth]      = useState(300); // right detail panel
+  const [gapOpen,        setGapOpen]        = useState(true);
+
+  // Drag-to-resize a side panel — works with mouse and touch. `grow` is +1 when
+  // dragging right widens the panel (left sidebar) and -1 when dragging left
+  // widens it (right panel).
+  const PANEL_MIN = 220, PANEL_MAX = 560;
+  const startResize = (e, setWidth, grow) => {
+    const pointX = (ev) => (ev.touches ? ev.touches[0].clientX : ev.clientX);
+    if (e.type === "mousedown") e.preventDefault();
+    const startX = pointX(e);
+    const startW = grow > 0 ? gapWidth : needWidth;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    const onMove = (ev) => {
+      if (ev.cancelable) ev.preventDefault();          // stop page scroll on touch
+      const max = Math.min(PANEL_MAX, window.innerWidth - 80); // never wider than screen
+      const next = startW + grow * (pointX(ev) - startX);
+      setWidth(Math.max(PANEL_MIN, Math.min(max, next)));
+    };
+    const onUp = () => {
+      ["mousemove", "touchmove"].forEach(t => window.removeEventListener(t, onMove));
+      ["mouseup", "touchend"].forEach(t => window.removeEventListener(t, onUp));
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+  };
 
   useEffect(() => { weightsRef.current = weights; }, [weights]);
   useEffect(() => { radiusRef.current = radius; }, [radius]);
@@ -431,109 +480,25 @@ export default function HealthMap() {
     const source = map.current.getSource("tracts");
     if (!source) return;
     try {
-      const res = await fetch(`${API}/api/fsf/distributions?dist_year=${year}`);
+      // County rollup + impact_score come straight from the backend — the one
+      // place the score is computed. No client-side re-aggregation.
+      const res = await fetch(`${API}/api/fsf/county-summary?dist_year=${year}`);
       if (!res.ok) return;
-      const apiData = await res.json();
-
-      // Normalize county names for matching
-      const normalizeCounty = (name) => {
-        if (!name) return "";
-        const n = name.toLowerCase().trim();
-        if (n.includes("miami") || n.includes("dade"))   return "miami-dade";
-        if (n.includes("broward"))                        return "broward";
-        if (n.includes("palm"))                           return "palm beach";
-        return "";
-      };
-
-      // Aggregate by county — sum totals, average impact_score
-      const countyAgg = {};
-      apiData.forEach(d => {
-        const key = normalizeCounty(d.county);
-        if (!key) return;
-        if (!countyAgg[key]) {
-          countyAgg[key] = {
-            households_served:  0,
-            individuals_served: 0,
-            meals_served:       0,
-            impact_score_sum:      0,
-            count:              0,
-            dist_year:          d.dist_year,
-          };
-        }
-        countyAgg[key].households_served  += d.households_served  || 0;
-        countyAgg[key].individuals_served += d.individuals_served || 0;
-        countyAgg[key].meals_served       += d.meals_served       || 0;
-        countyAgg[key].impact_score_sum      += d.impact_score || 0;
-        countyAgg[key].count              += 1;
-      });
-
-      // Recalculate impact_score from aggregated totals (same formula as backend)
-      const ZIP_POP = {
-        "33054":28000,"33055":32000,"33056":34000,"33127":19000,"33128":15000,
-        "33130":21000,"33132":14000,"33135":24000,"33136":18000,"33142":27000,
-        "33147":31000,"33150":22000,"33161":29000,"33162":31000,"33169":38000,
-        "33125":22000,"33126":31000,"33133":18000,"33134":20000,"33138":19000,
-        "33149":12000,"33155":29000,"33165":33000,"33166":28000,"33174":26000,
-        "33175":35000,"33177":38000,"33178":41000,"33179":32000,"33180":28000,
-        "33311":35000,"33312":42000,"33313":39000,"33314":28000,"33315":18000,
-        "33316":12000,"33317":44000,"33319":37000,"33322":46000,"33324":41000,
-        "33325":38000,"33328":43000,"33060":38000,"33062":29000,"33063":44000,
-        "33064":36000,"33065":42000,"33068":38000,"33069":31000,"33071":40000,
-        "33073":35000,"33076":28000,"33309":32000,"33334":29000,"33351":36000,
-        "33388":18000,"33441":31000,"33442":28000,"33444":22000,"33445":24000,
-        "33409":28000,"33430":18000,"33435":24000,"33460":21000,"33461":32000,
-        "33462":27000,"33463":35000,"33467":41000,"33472":29000,"33484":31000,
-        "33401":28000,"33403":18000,"33404":22000,"33405":19000,"33406":31000,
-        "33407":24000,"33408":21000,"33410":38000,"33411":42000,"33412":19000,
-        "33413":36000,"33414":31000,"33415":38000,"33417":29000,"33418":44000,
-        "33426":24000,"33428":31000,"33431":28000,"33432":32000,"33433":36000,
-        "33040":24000,"33050":11000,"33001":8000,"33036":9000,"33037":14000,
-        "33042":7000,"33043":6000,"33044":5000,"33045":4000,"33051":6000,
-      };
-      const DEFAULT_POP = 25000;
-
-      // Also accumulate pop per ZIP for accurate avg
-      const countyPop = {};
-      apiData.forEach(d => {
-        const key = normalizeCounty(d.county);
-        if (!key) return;
-        const pop = ZIP_POP[String(d.zip_code).padStart(5,"0")] || DEFAULT_POP;
-        countyPop[key] = (countyPop[key] || 0) + pop;
-      });
-
-      Object.keys(countyAgg).forEach(k => {
-        const c = countyAgg[k];
-        const avgInd   = c.individuals_served / Math.max(c.count, 1);
-        const avgMeals = c.meals_served       / Math.max(c.count, 1);
-        const avgPop   = (countyPop[k] || DEFAULT_POP * c.count) / Math.max(c.count, 1);
-        const popPct    = Math.min((avgInd / avgPop) / 0.05, 1.0) * 60;
-        const mealsSc   = Math.min((avgMeals / Math.max(avgInd, 1)) / 5.0, 1.0) * 40;
-        c.impact_score = Math.round((popPct + mealsSc) * 10) / 10;
-      });
-
-      // Map GEOID county FIPS → normalized county name
-      // Miami-Dade = 086, Broward = 011, Palm Beach = 099, Monroe = 087
-      const fipsToCounty = {
-        "12086": "miami-dade",
-        "12011": "broward",
-        "12099": "palm beach",
-        };
+      const summary = await res.json();
+      const byCounty = {};
+      summary.forEach(s => { byCounty[s.county] = s; });
 
       const geojson = await (await fetch("/tracts_2022.geojson")).json();
       geojson.features.forEach(f => {
-        const geoid      = f.properties.GEOID || "";
-        const fipsPrefix = geoid.slice(0, 5);
-        const countyKey  = fipsToCounty[fipsPrefix];
-        const match      = countyKey ? countyAgg[countyKey] : null;
-
+        const match = byCounty[countyFromGeoid(f.properties.GEOID)] || null;
         if (match) {
-          f.properties.impact_score          = match.impact_score;
+          f.properties.impact_score       = match.impact_score;
           f.properties.households_served  = match.households_served;
           f.properties.individuals_served = match.individuals_served;
           f.properties.meals_served       = match.meals_served;
           f.properties.dist_year          = match.dist_year;
         } else {
-          f.properties.impact_score          = null;
+          f.properties.impact_score       = null;
           f.properties.households_served  = null;
           f.properties.individuals_served = null;
           f.properties.meals_served       = null;
@@ -918,6 +883,9 @@ export default function HealthMap() {
   return (
     <div style={{ position: "relative", height: "100vh", width: "100vw", overflow: "hidden", fontFamily: "system-ui, sans-serif" }}>
 
+      {/* First-load intro */}
+      {showIntro && <IntroModal onClose={closeIntro} />}
+
       {/* Toast */}
       {toast && (
         <div style={{
@@ -940,10 +908,18 @@ export default function HealthMap() {
             Feeding South Florida — Health Equity Intelligence
           </span>
         </div>
-        <a href="/" style={{
-          color: "#9FE1CB", border: "1px solid #9FE1CB", borderRadius: 6,
-          padding: "4px 12px", fontSize: 12, textDecoration: "none",
-        }}>← Home</a>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => setShowIntro(true)} title="How this map works"
+            style={{
+              color: "#9FE1CB", background: "transparent", border: "1px solid #9FE1CB",
+              borderRadius: 6, padding: "4px 12px", fontSize: 12, cursor: "pointer",
+              fontFamily: "inherit", fontWeight: 500,
+            }}>? How it works</button>
+          <a href="/" style={{
+            color: "#9FE1CB", border: "1px solid #9FE1CB", borderRadius: 6,
+            padding: "4px 12px", fontSize: 12, textDecoration: "none",
+          }}>← Home</a>
+        </div>
       </div>
 
       {/* Control Bar — also spans full width */}
@@ -1056,30 +1032,36 @@ export default function HealthMap() {
       <div style={{ position: "absolute", top: 96, left: 0, right: 0, bottom: 0, display: "flex" }}>
 
       {/* ── Left: Coverage-gap sidebar (Need score view only) ── */}
-      {showGapSidebar && (
+      {showGapSidebar && gapOpen && (
         <div style={{
-          width: 300, flexShrink: 0,
+          width: gapWidth, flexShrink: 0, position: "relative",
           display: "flex", flexDirection: "column",
           background: "#f8f9fa", borderRight: "1px solid #e0e0e0",
         }}>
           <div style={{ padding: "16px 16px 12px", borderBottom: "1px solid #e0e0e0" }}>
-            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>
-              Coverage gaps
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 2 }}>
+                Coverage gaps
+              </div>
+              <button onClick={() => setGapOpen(false)} title="Hide panel"
+                style={{ border: "none", background: "none", fontSize: 20, cursor: "pointer", color: "#888", lineHeight: 1, marginTop: -2 }}>×</button>
             </div>
             <div style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>
               {gapTracts.length} tracts without a nearby partner
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 12, color: "#555", whiteSpace: "nowrap" }}>Radius</span>
-              <input
-                type="range" min="0.5" max="5" step="0.5" value={radius}
-                onChange={(e) => handleRadiusChange(Number(e.target.value))}
-                style={{ flex: 1 }}
-              />
-              <span style={{ fontSize: 12, fontWeight: 600, minWidth: 36, textAlign: "right" }}>
-                {radius} mi
+            {/* Label + value on one row, slider full-width below — never
+                collides or gets clipped no matter how narrow the panel is. */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+              <span style={{ fontSize: 12, color: "#555" }}>Radius</span>
+              <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
+                {radius.toFixed(1)} mi
               </span>
             </div>
+            <input
+              type="range" min="0.5" max="5" step="0.1" value={radius}
+              onChange={(e) => handleRadiusChange(Number(e.target.value))}
+              style={{ width: "100%", boxSizing: "border-box" }}
+            />
           </div>
 
           <div style={{ flex: 1, overflowY: "auto" }}>
@@ -1116,6 +1098,17 @@ export default function HealthMap() {
               ))
             )}
           </div>
+
+          {/* Drag handle — right edge widens the sidebar (mouse + touch) */}
+          <div
+            onMouseDown={(e) => startResize(e, setGapWidth, +1)}
+            onTouchStart={(e) => startResize(e, setGapWidth, +1)}
+            title="Drag to resize"
+            style={{
+              position: "absolute", top: 0, right: -5, bottom: 0, width: 10,
+              cursor: "col-resize", zIndex: 5, touchAction: "none",
+            }}
+          />
         </div>
       )}
 
@@ -1124,6 +1117,20 @@ export default function HealthMap() {
 
         {/* Map */}
         <div ref={mapContainer} style={{ position: "absolute", inset: 0 }} />
+
+        {/* Reopen tab for the coverage-gaps sidebar (Need view, when hidden).
+            Sits below the zoom controls (reset ≈16-48, zoom ≈60-120) so it
+            never overlaps the +/− buttons on any screen size. */}
+        {showGapSidebar && !gapOpen && (
+          <button onClick={() => setGapOpen(true)} title="Show coverage gaps"
+            style={{
+              position: "absolute", top: 150, left: 0, zIndex: 10,
+              background: "#fff", border: "none", borderRadius: "0 8px 8px 0",
+              padding: "12px 7px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+              boxShadow: "1px 1px 4px rgba(0,0,0,0.2)", color: "#444",
+              fontFamily: "inherit", writingMode: "vertical-rl",
+            }}>» Coverage gaps</button>
+        )}
 
         {/* Zoom */}
         <div style={{ position: "absolute", top: 60, left: 16, display: "flex", flexDirection: "column", gap: 2, zIndex: 10 }}>
@@ -1393,10 +1400,17 @@ export default function HealthMap() {
         {/* ── Tract Sidebar ── */}
         {selectedProps && !uploadOpen && (
           <div style={{
-            position: "absolute", top: 0, right: 0, bottom: 0, width: 300,
+            position: "absolute", top: 0, right: 0, bottom: 0, width: needWidth,
             background: "#fff", boxShadow: "-2px 0 8px rgba(0,0,0,0.12)",
             padding: "18px 20px", overflowY: "auto", zIndex: 15,
           }}>
+            {/* Drag handle — left edge widens the panel (mouse + touch) */}
+            <div
+              onMouseDown={(e) => startResize(e, setNeedWidth, -1)}
+              onTouchStart={(e) => startResize(e, setNeedWidth, -1)}
+              title="Drag to resize"
+              style={{ position: "absolute", top: 0, left: -5, bottom: 0, width: 10, cursor: "col-resize", zIndex: 5, touchAction: "none" }}
+            />
             <button onClick={() => { setSelected(null); map.current.setFilter("tracts-selected", ["==", "GEOID", ""]); }}
               style={{ float: "right", border: "none", background: "none", fontSize: 20, cursor: "pointer", color: "#888" }}>×</button>
 
@@ -1492,6 +1506,83 @@ function Stat({ label, value, note }) {
       <div style={{ fontSize: 12, color: "#888" }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 600 }}>{value}</div>
       <div style={{ fontSize: 11, color: "#bbb" }}>{note}</div>
+    </div>
+  );
+}
+
+function IntroSection({ title, children }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a2a", marginBottom: 3 }}>{title}</div>
+      <div style={{ fontSize: 13, color: "#555", lineHeight: 1.5 }}>{children}</div>
+    </div>
+  );
+}
+
+function IntroModal({ onClose }) {
+  const Section = IntroSection;
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "absolute", inset: 0, background: "rgba(0,0,0,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 100, padding: 16,
+      }}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 12, padding: "26px 28px",
+          width: "100%", maxWidth: 480, maxHeight: "85vh", overflowY: "auto",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.3)", fontFamily: "inherit",
+        }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700 }}>How this map works</h2>
+          <button onClick={onClose}
+            style={{ border: "none", background: "none", fontSize: 22, cursor: "pointer", color: "#888", lineHeight: 1 }}>×</button>
+        </div>
+        <p style={{ margin: "0 0 18px", color: "#888", fontSize: 12 }}>
+          A quick guide to the scores and colors. Reopen anytime with the “? How it works” button.
+        </p>
+
+        <Section title="Need score (0–100)">
+          Ranks each census tract’s food-access need <em>relative to the other tracts</em> in Miami-Dade,
+          Broward &amp; Palm Beach. It’s a weighted blend of 7 indicators, each converted to a percentile
+          rank (the CDC Social Vulnerability Index method) so one extreme tract can’t skew the scale:
+          <div style={{ marginTop: 6, fontSize: 12, color: "#333", background: "#f5f7f5", borderRadius: 6, padding: "8px 10px" }}>
+            Poverty 25% · Food desert 18% · SNAP 15% · No vehicle 12% · Low income 10% · Unemployment 10% · Housing cost burden 10%
+          </div>
+          <div style={{ marginTop: 6 }}>Change these anytime with <strong>⚙ Weights</strong> — the map recolors instantly.</div>
+        </Section>
+
+        <Section title="Map colors — Jenks natural breaks">
+          The 5 color bands aren’t fixed cutoffs. They’re set by <strong>Jenks natural breaks</strong>, which
+          finds the natural groupings in the data (minimizing variation within each band). That’s why the
+          legend’s number ranges shift when you change weights or the ACS year — the colors always reflect
+          the actual distribution.
+        </Section>
+
+        <Section title="Coverage gaps">
+          The left panel lists high-need tracts with <strong>no partner agency within the radius you set</strong> (0.1–5 mi).
+          Blue circles show each agency’s reach; tracts outside all circles are gaps.
+        </Section>
+
+        <Section title="Impact score (0–100)">
+          On the Impact layer: how far FSF distribution reached in each county — population reach (60%) +
+          meals per person (40%), from your uploaded distribution data.
+        </Section>
+
+        <Section title="Data sources">
+          Census ACS 5-year estimates · USDA Food Access Research Atlas (food-desert flags) · FSF distribution
+          uploads. Scores are relative within the 3-county region, not national.
+        </Section>
+
+        <button onClick={onClose} style={{
+          width: "100%", marginTop: 8, padding: "11px", borderRadius: 8, border: "none",
+          background: "#1a3a2a", color: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
+          fontFamily: "inherit",
+        }}>Got it</button>
+      </div>
     </div>
   );
 }

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { CORE_COUNTIES, normalizeCounty } from "../lib/counties";
 
 const API = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://127.0.0.1:8000" : "");
-const COUNTIES = ["Miami-Dade", "Broward", "Palm Beach"];
+const COUNTIES = CORE_COUNTIES;
 const COUNTY_COLORS = {
   "Miami-Dade": { line: "#E24B4A", bg: "#FCEBEB", text: "#A32D2D" },
   "Broward":    { line: "#185FA5", bg: "#E6F1FB", text: "#0C447C" },
@@ -13,16 +14,6 @@ const METRICS = [
   { key: "total_individuals", label: "Individuals served"   },
   { key: "total_households",  label: "Households served"    },
 ];
-
-function normalizeCounty(name) {
-  if (!name) return "";
-  const n = name.toLowerCase().trim();
-  if (n.includes("miami") || n.includes("dade")) return "Miami-Dade";
-  if (n.includes("broward"))                      return "Broward";
-  if (n.includes("palm"))                         return "Palm Beach";
-  if (n.includes("monroe"))                       return "Monroe";
-  return "";
-}
 
 function fmtVal(v, metric) {
   if (v === null || v === undefined) return "";
@@ -64,83 +55,36 @@ export default function TrendChart({ onClose }) {
           return;
         }
 
+        // Pull the pre-computed county rollup (incl. impact_score) per year —
+        // the backend is the single source of truth for the score.
         const yearlyData = {};
         for (const { year } of years) {
           try {
-            const r    = await fetch(`${API}/api/fsf/distributions?dist_year=${year}`);
-            const data = await r.json();
-            yearlyData[year] = data;
+            const r    = await fetch(`${API}/api/fsf/county-summary?dist_year=${year}`);
+            yearlyData[year] = r.ok ? await r.json() : [];
           } catch { yearlyData[year] = []; }
         }
 
-        // Aggregate by county per year
         const trend = {};
         COUNTIES.forEach(c => { trend[c] = {}; });
 
-        for (const [year, records] of Object.entries(yearlyData)) {
-          const agg = {};
-          COUNTIES.forEach(c => { agg[c] = { acc_sum:0, count:0, meals:0, individuals:0, households:0 }; });
-
-          // ZIP population lookup (same as backend)
-          const ZIP_POP = {
-            "33054":28000,"33055":32000,"33056":34000,"33127":19000,"33128":15000,
-            "33130":21000,"33132":14000,"33135":24000,"33136":18000,"33142":27000,
-            "33147":31000,"33150":22000,"33161":29000,"33162":31000,"33169":38000,
-            "33125":22000,"33126":31000,"33133":18000,"33134":20000,"33138":19000,
-            "33149":12000,"33155":29000,"33165":33000,"33166":28000,"33174":26000,
-            "33175":35000,"33177":38000,"33178":41000,"33179":32000,"33180":28000,
-            "33311":35000,"33312":42000,"33313":39000,"33314":28000,"33315":18000,
-            "33316":12000,"33317":44000,"33319":37000,"33322":46000,"33324":41000,
-            "33325":38000,"33328":43000,"33060":38000,"33062":29000,"33063":44000,
-            "33064":36000,"33065":42000,"33068":38000,"33069":31000,"33071":40000,
-            "33073":35000,"33076":28000,"33309":32000,"33334":29000,"33351":36000,
-            "33388":18000,"33441":31000,"33442":28000,"33444":22000,"33445":24000,
-            "33409":28000,"33430":18000,"33435":24000,"33460":21000,"33461":32000,
-            "33462":27000,"33463":35000,"33467":41000,"33472":29000,"33484":31000,
-            "33401":28000,"33403":18000,"33404":22000,"33405":19000,"33406":31000,
-            "33407":24000,"33408":21000,"33410":38000,"33411":42000,"33412":19000,
-            "33413":36000,"33414":31000,"33415":38000,"33417":29000,"33418":44000,
-            "33426":24000,"33428":31000,"33431":28000,"33432":32000,"33433":36000,
-            "33040":24000,"33050":11000,"33001":8000,"33036":9000,"33037":14000,
-            "33042":7000,"33043":6000,"33044":5000,"33045":4000,"33051":6000,
-          };
-          const DEFAULT_POP = 25000;
-
-          records.forEach(r => {
-            const key = normalizeCounty(r.county);
-            if (!key || !agg[key]) return;
-            agg[key].meals       += r.meals_served        || 0;
-            agg[key].individuals += r.individuals_served  || 0;
-            agg[key].households  += r.households_served   || 0;
-            agg[key].count       += 1;
-            // Store ZIP for pop lookup
-            const pop = ZIP_POP[String(r.zip_code).padStart(5,"0")] || DEFAULT_POP;
-            agg[key].pop_total   = (agg[key].pop_total || 0) + pop;
-          });
-
+        for (const [year, summary] of Object.entries(yearlyData)) {
+          const byCounty = {};
+          summary.forEach(s => { byCounty[normalizeCounty(s.county)] = s; });
           COUNTIES.forEach(c => {
-            const a = agg[c];
-            if (!a.count) {
-              trend[c][year] = { impact_score:0, total_meals:0, total_individuals:0, total_households:0 };
-              return;
-            }
-            // Recalculate score from aggregated totals — same formula as backend
-            const avgPop    = (a.pop_total || DEFAULT_POP * a.count) / a.count;
-            const avgInd    = a.individuals / a.count;
-            const avgMeals  = a.meals / a.count;
-            const popPct    = Math.min((avgInd / avgPop) / 0.05, 1.0) * 60;
-            const mealsSc   = Math.min((avgMeals / Math.max(avgInd, 1)) / 5.0, 1.0) * 40;
-            const impact_score = Math.round((popPct + mealsSc) * 10) / 10;
-            trend[c][year] = {
-              impact_score,
-              total_meals:       a.meals,
-              total_individuals: a.individuals,
-              total_households:  a.households,
-            };
+            const s = byCounty[c];
+            trend[c][year] = s
+              ? {
+                  impact_score:      s.impact_score,
+                  total_meals:       s.meals_served,
+                  total_individuals: s.individuals_served,
+                  total_households:  s.households_served,
+                }
+              : { impact_score: 0, total_meals: 0, total_individuals: 0, total_households: 0 };
           });
         }
 
-        const sortedYears = years.map(y => y.year).sort();
+        const sortedYears = years.map(y => y.year).sort((a, b) => a - b);
         setTrendData({ trend, years: sortedYears });
       } catch (e) {
         setError("Could not load trend data. Is the backend running?");

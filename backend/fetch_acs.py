@@ -17,6 +17,14 @@ COUNTIES = {
     "099": "Palm Beach",
 }
 
+# The 10 "30 percent or more" lines of B25106 (5 owner + 5 renter income
+# brackets) — households spending 30%+ of income on housing. Summed for the
+# cost-burden rate. Denominator is B25106_001E (all households).
+HOUSING_BURDEN_CODES = [
+    "B25106_006E", "B25106_010E", "B25106_014E", "B25106_018E", "B25106_022E",  # owner
+    "B25106_028E", "B25106_032E", "B25106_036E", "B25106_040E", "B25106_044E",  # renter
+]
+
 # Raw ACS variable codes -> readable names
 VARIABLES = {
     "B17001_002E": "poverty_below",     # income below poverty level
@@ -28,6 +36,10 @@ VARIABLES = {
     "B25044_010E": "renter_no_veh",     # renter-occ households, no vehicle
     "B25044_001E": "veh_total",         # total occupied households
     "B01003_001E": "total_pop",         # total population
+    "B23025_003E": "labor_force",       # civilian labor force
+    "B23025_005E": "unemployed",        # unemployed (civilian labor force)
+    "B25106_001E": "housing_total",     # all households (cost-burden denominator)
+    **{code: f"hb_{i}" for i, code in enumerate(HOUSING_BURDEN_CODES)},
 }
 
 def fetch_county(county_fips):
@@ -121,16 +133,26 @@ def fetch_acs_data(year: int, api_key: str) -> pd.DataFrame:
     df["pct_below_poverty"] = df["poverty_below"] / df["poverty_total"] * 100
     df["pct_snap_enrollment"] = df["snap_yes"] / df["snap_total"] * 100
     df["pct_no_vehicle"]    = (df["owner_no_veh"] + df["renter_no_veh"]) / df["veh_total"] * 100
+    df["unemployment_rate"] = df["unemployed"] / df["labor_force"] * 100
+    hb_cols = [f"hb_{i}" for i in range(len(HOUSING_BURDEN_CODES))]
+    df["housing_cost_burden_pct"] = df[hb_cols].sum(axis=1) / df["housing_total"] * 100
 
-    # Columns expected by main.py that ACS5 doesn't supply — default to 0
-    for col in ["need_score", "pct_low_income", "pct_children_under18",
-                "pct_seniors_65plus", "unemployment_rate", "housing_cost_burden_pct"]:
+    # Divide-by-zero (empty tracts) → inf; treat as missing.
+    for col in ["pct_below_poverty", "pct_snap_enrollment", "pct_no_vehicle",
+                "unemployment_rate", "housing_cost_burden_pct"]:
+        df.loc[~np.isfinite(df[col]), col] = np.nan
+
+    # Columns expected downstream that ACS5 doesn't supply — default to 0.
+    # NOTE: need_score is intentionally NOT set here — it is computed by
+    # scoring.compute_need_scores() in main.py after the food_desert flag is
+    # attached, so the stored score is real (not a placeholder 0).
+    for col in ["pct_low_income", "pct_children_under18", "pct_seniors_65plus"]:
         df[col] = 0.0
 
     return df[[
         "tract_id", "county_label", "total_pop", "median_income",
         "pct_below_poverty", "pct_snap_enrollment", "pct_no_vehicle",
-        "pct_low_income", "need_score", "pct_children_under18",
+        "pct_low_income", "pct_children_under18",
         "pct_seniors_65plus", "unemployment_rate", "housing_cost_burden_pct",
     ]].rename(columns={"county_label": "county", "total_pop": "population"})
 
