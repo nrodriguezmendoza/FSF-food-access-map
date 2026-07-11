@@ -27,7 +27,14 @@ elif DATABASE_URL.startswith("postgres"):
     if "sslmode" not in DATABASE_URL:
         sep = "&" if "?" in DATABASE_URL else "?"
         DATABASE_URL = DATABASE_URL + sep + "sslmode=require"
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
+    # Disable psycopg3 server-side prepared statements: Supabase's transaction
+    # pooler (PgBouncer) reuses backend connections, so a prepared statement
+    # created on one can collide on another → intermittent
+    # "DuplicatePreparedStatement" errors during bulk inserts.
+    engine = create_engine(
+        DATABASE_URL, pool_pre_ping=True, pool_recycle=300,
+        connect_args={"prepare_threshold": None},
+    )
 else:
     engine = create_engine(DATABASE_URL)
 
