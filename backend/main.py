@@ -161,7 +161,13 @@ def _do_acs_fetch(year: int):
 
 
 @app.post("/api/acs/fetch")
-def trigger_acs_fetch(acs_year: int = Query(2024), db: Session = Depends(get_db)):
+def trigger_acs_fetch(acs_year: int = Query(2024), force: bool = Query(False),
+                      db: Session = Depends(get_db)):
+    """Fetch ACS data for a year. If already loaded, returns cached — unless
+    force=true, which re-pulls from the Census API to refresh stale columns
+    (e.g. backfilling unemployment / housing after a schema change). The
+    re-fetch is safe: _do_acs_fetch writes the new batch fully before archiving
+    the old one, so the year is never left without data."""
     api_key = os.getenv("CENSUS_API_KEY", "")
     if not api_key:
         raise HTTPException(status_code=400, detail="CENSUS_API_KEY not set in backend/.env")
@@ -177,18 +183,20 @@ def trigger_acs_fetch(acs_year: int = Query(2024), db: Session = Depends(get_db)
     if job and job.status == "fetching":
         return {"message": f"Already fetching ACS {acs_year}...", "cached": False}
 
-    existing = db.query(UploadBatch).filter(
-        UploadBatch.acs_year == acs_year,
-        UploadBatch.status == "active",
-    ).first()
-    if existing:
-        _set_fetch_job(db, acs_year, "done", f"ACS {acs_year} already loaded", existing.row_count or 0)
-        return {"message": f"ACS {acs_year} already in database", "cached": True, "tracts": existing.row_count or 0}
+    if not force:
+        existing = db.query(UploadBatch).filter(
+            UploadBatch.acs_year == acs_year,
+            UploadBatch.status == "active",
+        ).first()
+        if existing:
+            _set_fetch_job(db, acs_year, "done", f"ACS {acs_year} already loaded", existing.row_count or 0)
+            return {"message": f"ACS {acs_year} already in database", "cached": True, "tracts": existing.row_count or 0}
 
     _set_fetch_job(db, acs_year, "fetching", "Starting...")
     t = threading.Thread(target=_do_acs_fetch, args=(acs_year,), daemon=True)
     t.start()
-    return {"message": f"Fetching ACS {acs_year} in background...", "cached": False}
+    verb = "Re-fetching" if force else "Fetching"
+    return {"message": f"{verb} ACS {acs_year} in background...", "cached": False}
 
 
 @app.get("/api/acs/fetch-status")
