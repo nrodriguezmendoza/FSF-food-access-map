@@ -15,6 +15,7 @@ COUNTIES = {
     "086": "Miami-Dade",
     "011": "Broward",
     "099": "Palm Beach",
+    "087": "Monroe",
 }
 
 # The 10 "30 percent or more" lines of B25106 (5 owner + 5 renter income

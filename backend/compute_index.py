@@ -1,7 +1,23 @@
 import pandas as pd
 
+import food_desert
+
 # Read the clean raw data produced by fetch_acs.py
 df = pd.read_csv("acs_raw.csv")
+
+# Attach the committed USDA food-desert flag (GEOID → 0/1). Both downstream
+# consumers of acs_with_index.csv expect this column — build_geojson.py bakes it
+# into the tract GeoJSON and migrate_to_supabase.py writes it to ACSRecord — so
+# it has to be joined on here, not in either of them.
+# It is deliberately NOT added to INDICATORS below: this script's 4-indicator
+# weighting is the static fallback baked into the GeoJSON, while the live map
+# recomputes need from all 7 indicators via scoring.compute_need_scores().
+df["GEOID"] = df["GEOID"].astype(str).str.zfill(11)
+df["food_desert"] = df["GEOID"].map(food_desert.load_flags())
+
+# Binary flag, so its percentile-rank normalization is just the flag itself —
+# the same value HealthMap.jsx derives client-side for food_desert_norm.
+df["food_desert_norm"] = df["food_desert"]
 
 # Indicator -> weight. Weights sum to 1.0.
 # 'invert=True' means HIGH values mean LESS need (only median_income).

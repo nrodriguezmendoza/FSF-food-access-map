@@ -1,185 +1,207 @@
 import { useNavigate } from "react-router-dom";
 
+const STATS = [
+  ["100M+", "MEALS PER YEAR"],
+  ["4", "COUNTIES SERVED"],
+  ["200+", "PARTNER AGENCIES"],
+];
+
+const TOOLS = [
+  {
+    num: "01",
+    title: "Health Equity Intelligence",
+    desc: "Maps where healthy food and nutrition education create the greatest community impact.",
+    to: "/map",
+  },
+  {
+    num: "02",
+    title: "Catering Menu Intelligence",
+    desc: "Cuts menu fatigue and buys smarter, so every catering dollar feeds more people.",
+  },
+  {
+    num: "03",
+    title: "Dynamic Pricing Engine",
+    desc: "Tracks competitive SKU pricing and automates rules that protect program margins.",
+  },
+];
+
 export default function Home() {
   const navigate = useNavigate();
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: "#f5f5f0", fontFamily: "system-ui, sans-serif",
-      display: "flex", flexDirection: "column",
-    }}>
+    <div className="fsf-home">
 
       {/* Header */}
-      <div style={{
-        background: "#1a3a2a", padding: "0 32px",
-        display: "flex", alignItems: "center",
-        justifyContent: "space-between", height: 56,
-        flexShrink: 0,
+      <header style={{
+        flex: "0 0 auto", display: "flex", alignItems: "center",
+        justifyContent: "space-between", gap: "clamp(12px, 2vw, 28px)",
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 28, filter: "sepia(1) saturate(10) hue-rotate(-30deg)" }}>🌿</span>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.1 }}>
-              <span style={{ color: "#F47B20" }}>FEEDING</span>
-              <sup style={{ color: "#F47B20", fontSize: 9, verticalAlign: "super" }}>®</sup>
-            </div>
-            <div style={{ color: "#9FE1CB", fontWeight: 700, fontSize: 12, letterSpacing: "0.04em", lineHeight: 1.15 }}>
-              SOUTH FLORIDA
-            </div>
-          </div>
-        </div>
-        <a
-          href="https://feedingsouthflorida.org"
-          target="_blank"
-          rel="noreferrer"
-          style={{ color: "#9FE1CB", fontSize: 14, textDecoration: "none", fontWeight: 500 }}
-        >
-          feedingsouthflorida.org ↗
-        </a>
-      </div>
-
-      {/* Hero */}
-      <div style={{
-        background: "#1a3a2a", padding: "20px 32px 24px",
-        textAlign: "center", flexShrink: 0,
-      }}>
-        <div style={{
-          display: "inline-block", background: "rgba(255,255,255,0.1)",
-          color: "#9FE1CB", fontSize: 11, padding: "3px 14px",
-          borderRadius: 20, marginBottom: 10, letterSpacing: "0.06em",
-        }}>
-          DATA-DRIVEN FOOD ACCESS TOOLS
-        </div>
-        <h1 style={{
-          color: "#fff", fontSize: 24, fontWeight: 600,
-          margin: "0 0 8px", lineHeight: 1.3,
-        }}>
-          Food access intelligence<br />for South Florida
-        </h1>
-        <p style={{
-          color: "rgba(255,255,255,0.65)", fontSize: 13,
-          maxWidth: 480, margin: "0 auto 18px", lineHeight: 1.55,
-        }}>
-          Identify where healthy food, education, and catering resources
-          can drive the greatest community impact across three counties.
-        </p>
-        <div style={{ display: "flex", justifyContent: "center", gap: 40 }}>
-          {[
-            ["800K+", "meals per year"],
-            ["3", "counties covered"],
-            ["3", "intelligence tools"],
-          ].map(([num, label]) => (
-            <div key={label} style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 20, fontWeight: 600, color: "#5DCAA5" }}>{num}</div>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", marginTop: 2, letterSpacing: "0.04em" }}>
-                {label.toUpperCase()}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Main content */}
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, justifyContent: "center", padding: "14px 24px 16px" }}>
-
-        <div style={{
-          fontSize: 11, fontWeight: 600, color: "#888",
-          letterSpacing: "0.08em", marginBottom: 8,
-        }}>
-          PLATFORM TOOLS
-        </div>
-
-        {/* Tiles grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
-
-          {/* Tile 1 — Catering Menu Intelligence */}
-          <div style={{
-            background: "#fff", borderRadius: 12,
-            border: "1px solid #e8e8e8", padding: "18px 18px",
-            display: "flex", flexDirection: "column",
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div className="fsf-display" style={{
+            width: 38, height: 38, borderRadius: "50%", background: "#F47B20",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 19, color: "#0F3B29", flexShrink: 0,
           }}>
-            <div style={{
-              width: 36, height: 36, borderRadius: 10,
-              background: "#E6F1FB", display: "flex",
-              alignItems: "center", justifyContent: "center",
-              fontSize: 18, marginBottom: 10, flexShrink: 0,
-            }}>🍽️</div>
-            <h2 style={{ fontSize: 15, fontWeight: 600, margin: "0 0 5px", color: "#1a1a1a" }}>
-              Catering Menu Intelligence
-            </h2>
-            <p style={{ fontSize: 12, color: "#1a1a1a", lineHeight: 1.5, margin: 0 }}>
-              Cut menu fatigue, save time, and buy smarter.
-              Happier clients, higher margins, efficient operations.
-            </p>
+            F
           </div>
+          <div className="fsf-display" style={{
+            display: "flex", flexDirection: "column",
+            lineHeight: 1.05, letterSpacing: "0.06em",
+          }}>
+            <span style={{ fontSize: "clamp(13px, 1.15vw, 17px)", color: "#F47B20" }}>FEEDING</span>
+            <span style={{ fontSize: "clamp(11px, 0.95vw, 14px)", color: "#F4F1E8" }}>SOUTH FLORIDA</span>
+          </div>
+        </div>
 
-          {/* Tile 2 — Health Equity Intelligence (clickable) */}
-          <div
-            onClick={() => navigate("/map")}
-            style={{
-              background: "#fff", borderRadius: 12,
-              border: "2px solid #1D9E75", padding: "18px 18px",
-              cursor: "pointer", transition: "box-shadow 0.15s",
-              display: "flex", flexDirection: "column",
-              boxSizing: "border-box",
-            }}
-            onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 20px rgba(29,158,117,0.15)"}
-            onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}
+        <div style={{
+          display: "flex", alignItems: "center",
+          gap: "clamp(12px, 1.8vw, 28px)", minWidth: 0,
+        }}>
+          <span className="fsf-display" style={{
+            fontWeight: 600, fontSize: "clamp(10px, 0.85vw, 14px)",
+            letterSpacing: "0.14em", color: "rgba(244,241,232,0.55)",
+            minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            MIAMI-DADE · BROWARD · PALM BEACH · MONROE
+          </span>
+          <a
+            className="fsf-sitelink"
+            href="https://feedingsouthflorida.org/"
+            target="_blank"
+            rel="noreferrer"
           >
-            <div style={{
-              width: 36, height: 36, borderRadius: 10,
-              background: "#E1F5EE", display: "flex",
-              alignItems: "center", justifyContent: "center",
-              fontSize: 18, marginBottom: 10, flexShrink: 0,
-            }}>🗺️</div>
-            <h2 style={{ fontSize: 15, fontWeight: 600, margin: "0 0 5px", color: "#1a1a1a" }}>
-              Health Equity Intelligence
-            </h2>
-            <p style={{ fontSize: 12, color: "#1a1a1a", lineHeight: 1.5, margin: 0 }}>
-              Use data and AI to identify where healthy food and education
-              can drive the greatest community impact.
-            </p>
-          </div>
-
-          {/* Tile 3 — Dynamic Pricing Engine */}
-          <div style={{
-            background: "#fff", borderRadius: 12,
-            border: "1px solid #e8e8e8", padding: "18px 18px",
-            display: "flex", flexDirection: "column",
-          }}>
-            <div style={{
-              width: 36, height: 36, borderRadius: 10,
-              background: "#FAEEDA", display: "flex",
-              alignItems: "center", justifyContent: "center",
-              fontSize: 18, marginBottom: 10, flexShrink: 0,
-            }}>💰</div>
-            <h2 style={{ fontSize: 15, fontWeight: 600, margin: "0 0 5px", color: "#1a1a1a" }}>
-              Dynamic Pricing Engine
-            </h2>
-            <p style={{ fontSize: 12, color: "#1a1a1a", lineHeight: 1.5, margin: 0 }}>
-              Drive growth, capture competitive prices on SKUs, apply configurable
-              pricing rules and integrate automated workflows.
-            </p>
-          </div>
-
+            feedingsouthflorida.org ↗
+          </a>
         </div>
+      </header>
 
-        {/* Mission strip — centered */}
-        <div style={{
-          marginTop: 42, background: "#fff",
-          borderRadius: 12, border: "1px solid #e8e8e8",
-          padding: "9px 18px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+      <div className="fsf-body">
+
+        {/* Hero */}
+        <section style={{
+          display: "flex", flexDirection: "column", justifyContent: "center",
+          gap: "clamp(12px, 2.6vh, 26px)", minHeight: 0,
         }}>
-          <span style={{ fontSize: 16, flexShrink: 0 }}>❤️</span>
-          <p style={{ fontSize: 13, color: "#1a1a1a", margin: 0, lineHeight: 1.55 }}>
-            <strong>Our mission:</strong> End hunger in South Florida by providing
-            immediate access to nutritious food, leading hunger and poverty advocacy
-            efforts, and transforming lives through innovative programming and education.
-          </p>
-        </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ width: 44, height: 4, background: "#F47B20", flexShrink: 0 }} />
+            <span className="fsf-display" style={{
+              fontWeight: 700, fontSize: "clamp(11px, 1.05vw, 15px)",
+              letterSpacing: "0.18em", color: "#F47B20",
+            }}>
+              DATA-DRIVEN FOOD ACCESS TOOLS
+            </span>
+          </div>
 
+          <h1 className="fsf-display" style={{
+            margin: 0,
+            fontSize: "clamp(30px, min(4.6vw, 8.2vh), 76px)",
+            lineHeight: 0.98, letterSpacing: "-0.02em", textWrap: "balance",
+          }}>
+            1 in 8 neighbors<br />here can't count on<br />
+            <span style={{ color: "#F47B20" }}>their next meal.</span>
+          </h1>
+
+          <p style={{
+            margin: 0, maxWidth: "34ch",
+            fontSize: "clamp(14px, min(1.35vw, 2.6vh), 24px)",
+            lineHeight: 1.4, color: "rgba(244,241,232,0.82)", textWrap: "pretty",
+          }}>
+            Three intelligence tools built for Feeding South Florida, showing exactly
+            where healthy food, education, and funding move the needle, county by county.
+          </p>
+
+          <div style={{
+            display: "flex", gap: "clamp(18px, 3vw, 44px)",
+            borderTop: "1px solid rgba(244,241,232,0.18)",
+            paddingTop: "clamp(10px, 2.2vh, 22px)",
+          }}>
+            {STATS.map(([value, label]) => (
+              <div key={label} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span className="fsf-display" style={{
+                  fontSize: "clamp(26px, min(2.6vw, 5vh), 44px)", lineHeight: 1, color: "#F4F1E8",
+                }}>
+                  {value}
+                </span>
+                <span className="fsf-display" style={{
+                  fontWeight: 600, fontSize: "clamp(10px, 0.85vw, 14px)",
+                  letterSpacing: "0.13em", color: "rgba(244,241,232,0.6)",
+                }}>
+                  {label}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Tool list */}
+        <section style={{
+          display: "flex", flexDirection: "column",
+          gap: "clamp(8px, 1.5vh, 14px)", minHeight: 0,
+        }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+            <span className="fsf-display" style={{
+              fontWeight: 700, fontSize: "clamp(10px, 0.85vw, 14px)",
+              letterSpacing: "0.18em", color: "rgba(244,241,232,0.5)",
+            }}>
+              THE PLATFORM
+            </span>
+            <span className="fsf-display" style={{
+              fontWeight: 700, fontSize: "clamp(10px, 0.85vw, 14px)",
+              letterSpacing: "0.18em", color: "rgba(244,241,232,0.5)",
+            }}>
+              03 TOOLS
+            </span>
+          </div>
+
+          {TOOLS.map(({ num, title, desc, to }) => {
+            const live = Boolean(to);
+            return (
+              <button
+                key={num}
+                type="button"
+                className={`fsf-card ${live ? "fsf-card--live" : "fsf-card--soon"}`}
+                onClick={live ? () => navigate(to) : undefined}
+                disabled={!live}
+                aria-label={live ? `Open ${title}` : `${title} — coming soon`}
+              >
+                <span className="fsf-card__num">{num}</span>
+                <span style={{
+                  display: "flex", flexDirection: "column",
+                  gap: "clamp(2px, 0.7vh, 6px)", minWidth: 0,
+                }}>
+                  <span className="fsf-card__title">{title}</span>
+                  <span className="fsf-card__desc">{desc}</span>
+                </span>
+                {live
+                  ? <span className="fsf-card__arrow" aria-hidden="true">→</span>
+                  : <span className="fsf-card__soon">COMING SOON</span>}
+              </button>
+            );
+          })}
+        </section>
       </div>
+
+      {/* Mission */}
+      <footer style={{
+        flex: "0 0 auto", display: "flex", alignItems: "center",
+        gap: "clamp(10px, 1.4vw, 18px)",
+        borderTop: "1px solid rgba(244,241,232,0.18)",
+        paddingTop: "clamp(9px, 1.8vh, 16px)",
+      }}>
+        <span className="fsf-display" style={{
+          fontWeight: 700, fontSize: "clamp(10px, 0.85vw, 14px)",
+          letterSpacing: "0.18em", color: "#F47B20", whiteSpace: "nowrap",
+        }}>
+          OUR MISSION
+        </span>
+        <span style={{
+          fontSize: "clamp(12px, min(1.25vw, 2.4vh), 18px)",
+          lineHeight: 1.35, color: "rgba(244,241,232,0.85)", textWrap: "pretty",
+        }}>
+          Equip Feeding South Florida with the data tools it needs to further its
+          mission of ending hunger across the region.
+        </span>
+      </footer>
     </div>
   );
 }
