@@ -780,15 +780,25 @@ export default function HealthMap() {
       });
 
       fetch("/tracts_2022.geojson").then(r => r.json()).then(geojson => {
-        const b = new maplibregl.LngLatBounds();
+        // Two boxes. `core` (Miami-Dade/Broward/Palm Beach) frames the default
+        // and reset view; Monroe (FIPS 12087) runs west to the Dry Tortugas and
+        // would triple the viewport width, shrinking the dense urban corridor
+        // where ~98% of tracts sit. `all` only widens the pan limit, so the Keys
+        // stay reachable by panning or zooming out.
+        const core = new maplibregl.LngLatBounds();
+        const all  = new maplibregl.LngLatBounds();
         geojson.features.forEach(f => {
           if (!f.geometry) return;
+          const isCore = !String(f.properties?.GEOID ?? "").startsWith("12087");
           const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates;
-          polys.forEach(poly => poly.forEach(ring => ring.forEach(c => b.extend(c))));
+          polys.forEach(poly => poly.forEach(ring => ring.forEach(c => {
+            all.extend(c);
+            if (isCore) core.extend(c);
+          })));
         });
-        map.current.fitBounds(b, { padding: 60, duration: 0 });
-        fullBounds.current = b;
-        const sw = b.getSouthWest(), ne = b.getNorthEast();
+        map.current.fitBounds(core, { padding: 60, duration: 0 });
+        fullBounds.current = core;
+        const sw = all.getSouthWest(), ne = all.getNorthEast();
         map.current.setMaxBounds([[sw.lng - 2, sw.lat - 2], [ne.lng + 2, ne.lat + 2]]);
       });
 
@@ -1387,7 +1397,7 @@ export default function HealthMap() {
                 ))}
                 <div style={{ background: "#f8f8f8", borderRadius: 6, padding: 10, fontSize: 11, color: "#666", lineHeight: 1.7, marginTop: 4 }}>
                   County must be exactly one of:<br />
-                  <strong>Miami-Dade · Broward · Palm Beach</strong>
+                  <strong>Miami-Dade · Broward · Palm Beach · Monroe</strong>
                 </div>
               </div>
             )}
@@ -1547,7 +1557,7 @@ function IntroModal({ onClose }) {
 
         <Section title="Need score (0–100)">
           Ranks each census tract’s food-access need <em>relative to the other tracts</em> in Miami-Dade,
-          Broward &amp; Palm Beach. It’s a weighted blend of 7 indicators, each converted to a percentile
+          Broward, Palm Beach &amp; Monroe. It’s a weighted blend of 7 indicators, each converted to a percentile
           rank (the CDC Social Vulnerability Index method) so one extreme tract can’t skew the scale:
           <div style={{ marginTop: 6, fontSize: 12, color: "#333", background: "#f5f7f5", borderRadius: 6, padding: "8px 10px" }}>
             Poverty 25% · Food desert 18% · SNAP 15% · No vehicle 12% · Low income 10% · Unemployment 10% · Housing cost burden 10%

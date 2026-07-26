@@ -9,8 +9,10 @@ export const COUNTY_BY_FIPS = {
   "12087": "Monroe",
 };
 
-// Counties shown in the trend chart (the three FSF core counties).
-export const CORE_COUNTIES = ["Miami-Dade", "Broward", "Palm Beach"];
+// Counties shown in the trend chart — FSF's full four-county service area.
+// Monroe is much smaller than the other three (~26 scored tracts), so its
+// impact score moves more year-to-year on the same underlying variance.
+export const CORE_COUNTIES = ["Miami-Dade", "Broward", "Palm Beach", "Monroe"];
 
 // Fuzzy county-name → canonical Title Case, or "" if unrecognized.
 export function normalizeCounty(name) {

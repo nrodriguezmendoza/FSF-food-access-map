@@ -7,6 +7,7 @@ const COUNTY_COLORS = {
   "Miami-Dade": { line: "#E24B4A", bg: "#FCEBEB", text: "#A32D2D" },
   "Broward":    { line: "#185FA5", bg: "#E6F1FB", text: "#0C447C" },
   "Palm Beach": { line: "#D4A017", bg: "#FEFBD8", text: "#7A5C00" },
+  "Monroe":     { line: "#1D8F7A", bg: "#E4F4F0", text: "#0B5648" },
 };
 const METRICS = [
   { key: "impact_score",         label: "Impact score" },

@@ -4,8 +4,8 @@ import pandas as pd
 # 1. Load the Florida tract shapefile
 tracts = gpd.read_file("geo/tl_2022_12_tract.shp")
 
-# 2. Keep only our three counties (COUNTYFP codes)
-COUNTIES = ["086", "011", "099"]  # Miami-Dade, Broward, Palm Beach
+# 2. Keep only our four counties (COUNTYFP codes)
+COUNTIES = ["086", "011", "099", "087"]  # Miami-Dade, Broward, Palm Beach, Monroe
 tracts = tracts[tracts["COUNTYFP"].isin(COUNTIES)]
 
 # 3. Load the scored data
