@@ -1718,8 +1718,9 @@ function IntroModal({ onClose }) {
         </Section>
 
         <Section title="Impact score (0–100)">
-          On the Impact layer: how far FSF distribution reached in each county — population reach (60%) +
-          meals per person (40%), from your uploaded distribution data.
+          On the Impact layer: How effectively FSF reached each county, from your uploaded distribution data. Two components:
+          <br/>• <strong>Population reach (60%)</strong> — measured against a 5%-of-population monthly benchmark. 
+          <br/>• <strong>Meals per person (40%)</strong> — measured against a 5-meals-per-person monthly benchmark.
         </Section>
 
         <Section title="Data sources">
