@@ -14,11 +14,11 @@ const ACS_YEARS = [
 ];
 
 const ACC_LEGEND = [
-  { color: "#FFD700", label: "Excellent",  range: "65–100" },
+  { color: "#f1bf83", label: "Excellent",  range: "65–100" },
   { color: "#185FA5", label: "Good",       range: "50–65"  },
   { color: "#5ec962", label: "Moderate",   range: "38–50"  },
   { color: "#F4C0D1", label: "Low",        range: "30–38"  },
-  { color: "#7F77DD", label: "Minimal",    range: "0–30"   },
+  { color: "#534aac", label: "Minimal",    range: "0–30"   },
 ];
 
 const DEFAULT_WEIGHTS = {
@@ -65,6 +65,80 @@ function polyCentroid(feature) {
   ring.forEach(([lng, lat]) => { sumLng += lng; sumLat += lat; });
   return [sumLng / ring.length, sumLat / ring.length];
 }
+
+// ── ZIP centroids (approximate) for nearest-ZIP tract coloring (Option B) ──────
+const ZIP_COORDS = {
+  // Miami-Dade
+  "33054":[25.907,-80.244],"33055":[25.930,-80.281],"33056":[25.947,-80.251],
+  "33127":[25.813,-80.209],"33128":[25.778,-80.204],"33130":[25.767,-80.202],
+  "33132":[25.783,-80.185],"33135":[25.764,-80.234],"33136":[25.787,-80.201],
+  "33142":[25.808,-80.235],"33147":[25.852,-80.238],"33150":[25.855,-80.209],
+  "33161":[25.895,-80.183],"33162":[25.931,-80.190],"33169":[25.947,-80.210],
+  "33125":[25.784,-80.237],"33126":[25.777,-80.300],"33133":[25.735,-80.245],
+  "33134":[25.755,-80.271],"33138":[25.851,-80.180],"33149":[25.700,-80.163],
+  "33155":[25.735,-80.313],"33165":[25.735,-80.353],"33166":[25.823,-80.300],
+  "33174":[25.760,-80.363],"33175":[25.720,-80.400],"33177":[25.595,-80.410],
+  "33178":[25.842,-80.380],"33179":[25.960,-80.190],"33180":[25.958,-80.143],
+  // Broward
+  "33311":[26.145,-80.185],"33312":[26.100,-80.200],"33313":[26.155,-80.230],
+  "33314":[26.075,-80.230],"33315":[26.085,-80.170],"33316":[26.100,-80.135],
+  "33317":[26.115,-80.240],"33319":[26.185,-80.230],"33322":[26.145,-80.290],
+  "33324":[26.110,-80.280],"33325":[26.110,-80.320],"33328":[26.070,-80.280],
+  "33060":[26.235,-80.125],"33062":[26.245,-80.095],"33063":[26.255,-80.210],
+  "33064":[26.275,-80.130],"33065":[26.270,-80.255],"33068":[26.215,-80.215],
+  "33069":[26.235,-80.165],"33071":[26.240,-80.280],"33073":[26.290,-80.220],
+  "33076":[26.305,-80.270],"33309":[26.185,-80.170],"33334":[26.205,-80.135],
+  "33351":[26.180,-80.280],"33388":[26.120,-80.290],"33441":[26.310,-80.100],
+  "33442":[26.305,-80.155],"33444":[26.455,-80.075],"33445":[26.450,-80.110],
+  // Palm Beach
+  "33409":[26.710,-80.085],"33430":[26.680,-80.665],"33435":[26.520,-80.070],
+  "33460":[26.620,-80.060],"33461":[26.615,-80.095],"33462":[26.560,-80.080],
+  "33463":[26.590,-80.130],"33467":[26.580,-80.180],"33472":[26.630,-80.190],
+  "33484":[26.455,-80.155],"33401":[26.715,-80.065],"33403":[26.795,-80.075],
+  "33404":[26.775,-80.070],"33405":[26.680,-80.055],"33406":[26.660,-80.095],
+  "33407":[26.760,-80.085],"33408":[26.845,-80.060],"33410":[26.855,-80.090],
+  "33411":[26.715,-80.210],"33412":[26.780,-80.210],"33413":[26.660,-80.160],
+  "33414":[26.660,-80.250],"33415":[26.650,-80.130],"33417":[26.720,-80.125],
+  "33418":[26.830,-80.160],"33426":[26.525,-80.115],"33428":[26.350,-80.230],
+  "33431":[26.375,-80.100],"33432":[26.345,-80.080],"33433":[26.360,-80.155],
+};
+
+// ZIP population (matches backend main.py) for per-ZIP impact score
+const ZIP_POP = {
+  "33054":28000,"33055":32000,"33056":34000,"33127":19000,"33128":15000,
+  "33130":21000,"33132":14000,"33135":24000,"33136":18000,"33142":27000,
+  "33147":31000,"33150":22000,"33161":29000,"33162":31000,"33169":38000,
+  "33125":22000,"33126":31000,"33133":18000,"33134":20000,"33138":19000,
+  "33149":12000,"33155":29000,"33165":33000,"33166":28000,"33174":26000,
+  "33175":35000,"33177":38000,"33178":41000,"33179":32000,"33180":28000,
+  "33311":35000,"33312":42000,"33313":39000,"33314":28000,"33315":18000,
+  "33316":12000,"33317":44000,"33319":37000,"33322":46000,"33324":41000,
+  "33325":38000,"33328":43000,"33060":38000,"33062":29000,"33063":44000,
+  "33064":36000,"33065":42000,"33068":38000,"33069":31000,"33071":40000,
+  "33073":35000,"33076":28000,"33309":32000,"33334":29000,"33351":36000,
+  "33388":18000,"33441":31000,"33442":28000,"33444":22000,"33445":24000,
+  "33409":28000,"33430":18000,"33435":24000,"33460":21000,"33461":32000,
+  "33462":27000,"33463":35000,"33467":41000,"33472":29000,"33484":31000,
+  "33401":28000,"33403":18000,"33404":22000,"33405":19000,"33406":31000,
+  "33407":24000,"33408":21000,"33410":38000,"33411":42000,"33412":19000,
+  "33413":36000,"33414":31000,"33415":38000,"33417":29000,"33418":44000,
+  "33426":24000,"33428":31000,"33431":28000,"33432":32000,"33433":36000,
+};
+const DEFAULT_ZIP_POP = 25000;
+
+// Nearest ZIP (by squared distance) to a tract centroid, restricted to a set of ZIPs
+function nearestZip(lat, lng, zipList) {
+  let best = null, bestD = Infinity;
+  for (const z of zipList) {
+    const c = ZIP_COORDS[z];
+    if (!c) continue;
+    const dLat = c[0] - lat, dLng = c[1] - lng;
+    const d = dLat * dLat + dLng * dLng;
+    if (d < bestD) { bestD = d; best = z; }
+  }
+  return best;
+}
+
 
 // Approximate circle polygon for a point at (lng, lat) with radius in miles
 function makeCircle(lng, lat, radiusMiles, steps = 48) {
@@ -185,6 +259,19 @@ function jenksBreaks(data, k) {
     pos = lc[pos][q] - 1;
   }
   return breaks;
+}
+
+
+// Normalize a CSV county string to the canonical name countyFromGeoid() returns,
+// so per-ZIP data and tract lookups use the same county keys.
+function countyFromGeoid_zipCounty(name) {
+  if (!name) return "";
+  const n = String(name).toLowerCase();
+  if (n.includes("miami") || n.includes("dade")) return countyFromGeoid("12086000000");
+  if (n.includes("broward"))                     return countyFromGeoid("12011000000");
+  if (n.includes("palm"))                        return countyFromGeoid("12099000000");
+  if (n.includes("monroe"))                      return countyFromGeoid("12087000000");
+  return name;
 }
 
 export default function HealthMap() {
@@ -480,28 +567,83 @@ export default function HealthMap() {
     const source = map.current.getSource("tracts");
     if (!source) return;
     try {
-      // County rollup + impact_score come straight from the backend — the one
-      // place the score is computed. No client-side re-aggregation.
-      const res = await fetch(`${API}/api/fsf/county-summary?dist_year=${year}`);
+      // ── Option B: per-ZIP impact score, assigned to each tract by nearest ZIP ──
+      // Pull the raw per-ZIP distribution rows and compute a score for every ZIP,
+      // then color each tract using the score of its geographically nearest ZIP.
+      // This produces a within-county color mix instead of one flat county color.
+      const res = await fetch(`${API}/api/fsf/distributions?dist_year=${year}`);
       if (!res.ok) return;
-      const summary = await res.json();
-      const byCounty = {};
-      summary.forEach(s => { byCounty[s.county] = s; });
+      const rows = await res.json();
 
+      // 1. Aggregate rows → per-ZIP totals (sum across months)
+      const zipAgg = {};
+      rows.forEach(d => {
+        const z = String(d.zip_code).padStart(5, "0");
+        if (!zipAgg[z]) {
+          zipAgg[z] = { ind: 0, meals: 0, hh: 0, months: 0, county: d.county };
+        }
+        zipAgg[z].ind    += d.individuals_served || 0;
+        zipAgg[z].meals  += d.meals_served       || 0;
+        zipAgg[z].hh     += d.households_served   || 0;
+        zipAgg[z].months += 1;
+      });
+
+      // 2. Compute an impact score per ZIP (same formula & benchmarks as backend)
+      const zipScore = {};
+      Object.keys(zipAgg).forEach(z => {
+        const a = zipAgg[z];
+        const months  = Math.max(a.months, 1);
+        const avgInd   = a.ind   / months;
+        const avgMeals = a.meals / months;
+        const pop      = ZIP_POP[z] || DEFAULT_ZIP_POP;
+        const popPct   = Math.min((avgInd / pop) / 0.05, 1.0) * 60;
+        const mealsSc  = Math.min((avgMeals / Math.max(avgInd, 1)) / 5.0, 1.0) * 40;
+        zipScore[z] = {
+          score: Math.round((popPct + mealsSc) * 10) / 10,
+          ind:   a.ind,
+          meals: a.meals,
+          hh:    a.hh,
+          county: a.county,
+        };
+      });
+
+      // 3. Which ZIPs belong to each county (only those present in this year's data)
+      const zipsByCounty = {};
+      Object.keys(zipScore).forEach(z => {
+        const cty = countyFromGeoid_zipCounty(zipScore[z].county);
+        if (!zipsByCounty[cty]) zipsByCounty[cty] = [];
+        zipsByCounty[cty].push(z);
+      });
+
+      // 4. Assign each tract the score of its nearest ZIP (within the same county)
       const geojson = await (await fetch("/tracts_2022.geojson")).json();
       geojson.features.forEach(f => {
-        const match = byCounty[countyFromGeoid(f.properties.GEOID)] || null;
-        if (match) {
-          f.properties.impact_score       = match.impact_score;
-          f.properties.households_served  = match.households_served;
-          f.properties.individuals_served = match.individuals_served;
-          f.properties.meals_served       = match.meals_served;
-          f.properties.dist_year          = match.dist_year;
-        } else {
-          f.properties.impact_score       = null;
-          f.properties.households_served  = null;
+        const county = countyFromGeoid(f.properties.GEOID);
+        const zipList = zipsByCounty[county];
+        if (!zipList || zipList.length === 0) {
+          f.properties.impact_score = null;
+          f.properties.households_served = null;
           f.properties.individuals_served = null;
-          f.properties.meals_served       = null;
+          f.properties.meals_served = null;
+          f.properties.nearest_zip = null;
+          return;
+        }
+        // tract centroid (cache reused from need-score pass if present)
+        let cen = tractCentroids.current[f.properties.GEOID];
+        if (!cen) { cen = polyCentroid(f); tractCentroids.current[f.properties.GEOID] = cen; }
+        const [lng, lat] = cen;
+        const z = nearestZip(lat, lng, zipList);
+        const s = z ? zipScore[z] : null;
+        if (s) {
+          f.properties.impact_score       = s.score;
+          f.properties.households_served  = s.hh;
+          f.properties.individuals_served = s.ind;
+          f.properties.meals_served       = s.meals;
+          f.properties.nearest_zip        = z;
+          f.properties.dist_year          = year;
+        } else {
+          f.properties.impact_score = null;
+          f.properties.nearest_zip  = null;
         }
       });
 
@@ -510,10 +652,8 @@ export default function HealthMap() {
 
       map.current.setPaintProperty("tracts-fill", "fill-color", [
         "step", ["coalesce", ["get", "impact_score"], -1],
-        "#cccccc", 0, "#7F77DD", 30, "#F4C0D1", 38, "#5ec962", 50, "#185FA5", 65, "#FFD700",
+        "#cccccc", 0, "#534aac", 30, "#F4C0D1", 38, "#5ec962", 50, "#185FA5", 65, "#f1bf83",
       ]);
-      // Coverage-gap overlay is Need-score-specific; keep the impact layer
-      // at full opacity regardless of "covered" feature-state.
       map.current.setPaintProperty("tracts-fill", "fill-opacity", 0.72);
     } catch (e) { console.error("FSF load error", e); }
   }, []);
@@ -610,7 +750,7 @@ export default function HealthMap() {
         }
       }
     }
-  }, [acsYear, fsfYear, loadAcsData, loadFsfData]);
+  }, [acsYear, fsfYear, fsfAvailYears, loadAcsData, loadFsfData]);
 
   // ── FSF Upload ─────────────────────────────────────────────────────────────
   const handleFsfUpload = async () => {
@@ -1454,7 +1594,7 @@ export default function HealthMap() {
                   Impact score: {fmt(selectedProps.impact_score)}
                 </h2>
                 <p style={{ margin: "0 0 18px", color: "#888", fontSize: 12 }}>
-                  {selectedProps.county_name} County · FSF {fsfYear}
+                  {selectedProps.county_name} County · FSF {fsfYear}{selectedProps.nearest_zip ? ` · ZIP ${selectedProps.nearest_zip}` : ""}
                 </p>
                 <Stat label="Meals served"        value={selectedProps.meals_served       ? Number(selectedProps.meals_served).toLocaleString()       : "—"} note="total meals (annual)" />
                 <Stat label="Individuals served"  value={selectedProps.individuals_served ? Number(selectedProps.individuals_served).toLocaleString() : "—"} note="people reached" />
