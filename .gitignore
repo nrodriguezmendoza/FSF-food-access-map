@@ -25,3 +25,7 @@ backend/fsf_data.db
 Thumbs.db
 .vercel
 .env*
+
+# Test
+__pycache__/
+.pytest_cache/
