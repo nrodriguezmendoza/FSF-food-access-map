@@ -17,11 +17,13 @@ const TOOLS = [
     num: "02",
     title: "Catering Menu Intelligence",
     desc: "Cuts menu fatigue and buys smarter, so every catering dollar feeds more people.",
+    to: "https://fsf-menu-intelligence.vercel.app/",
   },
   {
     num: "03",
     title: "Dynamic Pricing Engine",
     desc: "Tracks competitive SKU pricing and automates rules that protect program margins.",
+    to: "https://fsf-pricing-engine-app.vercel.app/",
   },
 ];
 
@@ -155,14 +157,19 @@ export default function Home() {
 
           {TOOLS.map(({ num, title, desc, to }) => {
             const live = Boolean(to);
+            const external = live && /^https?:\/\//.test(to);
+            const handleClick = () => {
+              if (external) window.open(to, "_blank", "noopener,noreferrer");
+              else navigate(to);
+            };
             return (
               <button
                 key={num}
                 type="button"
                 className={`fsf-card ${live ? "fsf-card--live" : "fsf-card--soon"}`}
-                onClick={live ? () => navigate(to) : undefined}
+                onClick={live ? handleClick : undefined}
                 disabled={!live}
-                aria-label={live ? `Open ${title}` : `${title} — coming soon`}
+                aria-label={live ? `Open ${title}${external ? " (opens in new tab)" : ""}` : `${title} — coming soon`}
               >
                 <span className="fsf-card__num">{num}</span>
                 <span style={{
@@ -173,7 +180,7 @@ export default function Home() {
                   <span className="fsf-card__desc">{desc}</span>
                 </span>
                 {live
-                  ? <span className="fsf-card__arrow" aria-hidden="true">→</span>
+                  ? <span className="fsf-card__arrow" aria-hidden="true">{external ? "↗" : "→"}</span>
                   : <span className="fsf-card__soon">COMING SOON</span>}
               </button>
             );
