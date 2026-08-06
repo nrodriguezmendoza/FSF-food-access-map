@@ -1,0 +1,27 @@
+[
+  {
+    "name": "LEADERS OF MANY",
+    "address": "5060 ANNUNCIATION WAY IMMOKALEE FL 34142",
+    "type": "Non-profit"
+  },
+  {
+    "name": "Open Hearts Food Pantry",
+    "address": "1708 North SR 7 Hollywood FL 33021",
+    "type": "Food Pantry"
+  },
+  {
+    "name": "Corazones en la Communidad",
+    "address": "1851 N Krome Ave Homestead FL 33030",
+    "type": "Non-profit"
+  },
+  {
+    "name": "Boca Helping Hands - Boca Raton",
+    "address": "10101 Judge Winikoff Rd Boca Raton FL 33428",
+    "type": "Non-profit"
+  },
+  {
+    "name": "Village Oaks Elementary",
+    "address": "1601 FL-29 Immokalee FL 34142",
+    "type": "School"
+  }
+]
