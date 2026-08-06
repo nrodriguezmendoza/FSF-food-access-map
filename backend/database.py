@@ -38,6 +38,21 @@ elif DATABASE_URL.startswith("postgres"):
 else:
     engine = create_engine(DATABASE_URL)
 
+
+def _describe_target(url: str) -> str:
+    """Human-readable DB target with credentials stripped — never log the raw URL."""
+    if url.startswith("sqlite"):
+        return f"SQLite (local file) — {url.split('///')[-1].split('?')[0]}"
+    host = url.split("@")[-1].split("/")[0] if "@" in url else "unknown host"
+    tag = "PRODUCTION Supabase" if "supabase" in host else "PostgreSQL"
+    return f"{tag} — {host}"
+
+
+# Printed on every import so it is obvious which database you are about to touch.
+# Getting this wrong is easy: .env points at production, and if a uvicorn is
+# already bound to the port your new one exits and requests go to the old server.
+print(f"[database] connected to: {_describe_target(DATABASE_URL)}", flush=True)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
