@@ -43,9 +43,12 @@ const LABELS = {
 
 // ── Gap-analysis & weighted-scoring helpers (ported from the pre-refactor App.jsx) ──
 
+// Mean radius of the Earth in miles — shared by the distance and circle helpers.
+const EARTH_RADIUS_MI = 3958.8;
+
 // Haversine distance in miles between two lat/lng points
 function distanceMiles(lat1, lng1, lat2, lng2) {
-  const R = 3958.8;
+  const R = EARTH_RADIUS_MI;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLng = ((lng2 - lng1) * Math.PI) / 180;
   const a =
@@ -142,7 +145,7 @@ function nearestZip(lat, lng, zipList) {
 
 // Approximate circle polygon for a point at (lng, lat) with radius in miles
 function makeCircle(lng, lat, radiusMiles, steps = 48) {
-  const R = 3958.8;
+  const R = EARTH_RADIUS_MI;
   const coords = [];
   for (let i = 0; i <= steps; i++) {
     const bearing = (i / steps) * 2 * Math.PI;
@@ -155,12 +158,21 @@ function makeCircle(lng, lat, radiusMiles, steps = 48) {
   return { type: "Polygon", coordinates: [coords] };
 }
 
-function scoreColor(score) {
-  if (score >= 80) return "#2d1160";
-  if (score >= 60) return "#440154";
-  if (score >= 40) return "#3b528b";
-  if (score >= 20) return "#21918c";
-  return "#5ec962";
+// Need-score band colors, lowest band first. Single source of truth: the
+// choropleth paint expression in applyWeights, the legend, and the coverage-gap
+// list all read this array so a tract's number can never disagree with its fill.
+const SCORE_COLORS = ["#5ec962", "#21918c", "#3b528b", "#440154", "#2d1160"];
+
+// `breaks` are the 4 Jenks cut points currently painted on the map. Falls back to
+// fixed quintiles only before the first paint, when no breaks exist yet.
+function scoreColor(score, breaks) {
+  const b = Array.isArray(breaks) && breaks.length === 4 ? breaks : [20, 40, 60, 80];
+  // Matches MapLibre "step" semantics: a value lands in the band of the last stop
+  // it is >= to.
+  for (let i = b.length - 1; i >= 0; i--) {
+    if (score >= b[i]) return SCORE_COLORS[i + 1];
+  }
+  return SCORE_COLORS[0];
 }
 
 // Index of the right-most insertion point for x in a sorted array — i.e. the
@@ -185,8 +197,14 @@ function normalizeTracts(geojson) {
   const fields = ["poverty_rate", "snap_rate", "no_vehicle_rate", "median_income",
                   "unemployment_rate", "housing_cost_burden"];
   const invert = new Set(["median_income"]);
+  // Rank against ELIGIBLE tracts only. backend/scoring.py takes the eligible
+  // subset before ranking (`sub = df[eligible]`), so ranking over everything here
+  // would put institutional outliers — 83% poverty, 90% SNAP — inside the
+  // distribution every real tract is measured against, and the browser's score
+  // could never equal the need_score the backend stores.
+  const ranked = geojson.features.filter((f) => isEligibleTract(f.properties));
   fields.forEach((field) => {
-    const sorted = geojson.features
+    const sorted = ranked
       .map((x) => x.properties[field])
       .filter((v) => v != null && !Number.isNaN(Number(v)))
       .map(Number)
@@ -210,21 +228,53 @@ function normalizeTracts(geojson) {
   return geojson;
 }
 
+// Every tract property that loadAcsData copies from the API response. Listed once
+// so the "no data for this tract" path can clear exactly the same set it fills.
+const MERGED_TRACT_FIELDS = [
+  "need_score", "median_income", "total_pop", "county_name",
+  "poverty_rate", "snap_rate", "no_vehicle_rate", "food_desert",
+  "supermarket_dist_mi", "unemployment_rate", "housing_cost_burden",
+];
+
+// Mirrors eligible_tract_mask() in backend/scoring.py — keep the thresholds in
+// sync with MIN_INDICATORS_PRESENT / INSTITUTIONAL_TRACT_MIN / MIN_TRACT_POP there.
+//
+// The 9800–9999 tract range is reserved by the Census for institutional group
+// quarters (prisons, dorms, barracks, airports). Their ACS rates are real but
+// describe an institution, not a neighborhood, so they are not somewhere to site
+// a partner agency. Without this filter the browser re-scores the very tracts the
+// backend deliberately drops: tract 12086980700 (83% poverty, 90% SNAP) scores
+// ~99.98 and lands at the top of the coverage-gap list.
+const INSTITUTIONAL_TRACT_MIN = 980000;
+const MIN_TRACT_POP = 100;
+const MIN_INDICATORS_PRESENT = 3;
+
+function isEligibleTract(props) {
+  const geoid = String(props?.GEOID ?? "");
+  if (geoid.length < 6) return false;
+  const tractCode = Number(geoid.slice(-6));
+  if (!Number.isFinite(tractCode) || tractCode >= INSTITUTIONAL_TRACT_MIN) return false;
+  const pop = Number(props?.total_pop);
+  return Number.isFinite(pop) && pop >= MIN_TRACT_POP;
+}
+
+// Returns null for any tract that should not carry a need score — ineligible
+// tracts, or tracts with too few indicators to rank fairly. Every consumer
+// (choropleth, Jenks breaks, coverage-gap list, detail panel) reads through this
+// one function, so the exclusion holds everywhere.
 function computeScore(props, w) {
+  if (!isEligibleTract(props)) return null;
   const keys = Object.keys(w);
-  let weighted = 0, present = 0;
+  let weighted = 0, present = 0, count = 0;
   keys.forEach((k) => {
     const norm = props[k + "_norm"];
     if (norm != null && !Number.isNaN(Number(norm))) {
       weighted += Number(norm) * w[k];
       present += w[k];
+      count += 1;
     }
   });
-  const count = keys.filter((k) => {
-    const n = props[k + "_norm"];
-    return n != null && !Number.isNaN(Number(n));
-  }).length;
-  return count >= 3 && present > 0 ? (weighted / present) * 100 : null;
+  return count >= MIN_INDICATORS_PRESENT && present > 0 ? (weighted / present) * 100 : null;
 }
 
 function jenksBreaks(data, k) {
@@ -261,6 +311,39 @@ function jenksBreaks(data, k) {
   return breaks;
 }
 
+// jenksBreaks assumes a spread-out distribution. On a degenerate one it returns
+// too few stops, or undefined ones: dragging any single weight to 100 rebalances
+// every other weight to 0, so every score becomes exactly 0 or 100 and Jenks
+// returns [undefined, undefined, 0, 0].
+//
+// MapLibre requires a "step" expression's stops to be finite and strictly
+// ascending. Feeding it bad stops throws inside setPaintProperty, which aborts
+// applyWeights before it reaches recomputeGap — leaving the map and the coverage-
+// gap list out of sync. Validate the stop list we are about to build (including
+// the leading literal 0) and fall back to equal intervals when it is unusable.
+function safeBreaks(scores, k = 5) {
+  const want = k - 1;
+  const usable = (breaks) => {
+    if (breaks.length !== want) return false;
+    const stops = [0, ...breaks];
+    return stops.every((v, i) => Number.isFinite(v) && (i === 0 || v > stops[i - 1]));
+  };
+
+  const jenks = jenksBreaks(scores, k);
+  if (usable(jenks)) return jenks;
+
+  const finite = scores.filter((v) => Number.isFinite(v));
+  if (finite.length) {
+    const lo = finite.reduce((a, b) => Math.min(a, b), Infinity);
+    const hi = finite.reduce((a, b) => Math.max(a, b), -Infinity);
+    const step = (hi - lo) / k;
+    const spread = Array.from({ length: want }, (_, i) => lo + step * (i + 1));
+    if (usable(spread)) return spread;
+  }
+  // Scores are always 0–100, so fixed quintiles are a valid last resort.
+  return [20, 40, 60, 80];
+}
+
 
 // Normalize a CSV county string to the canonical name countyFromGeoid() returns,
 // so per-ZIP data and tract lookups use the same county keys.
@@ -279,6 +362,8 @@ export default function HealthMap() {
   const map          = useRef(null);
   const fullBounds   = useRef(null);
   const pollRef      = useRef(null);
+  const toastRef     = useRef(null);
+  const loadSeqRef   = useRef(0);  // monotonic ticket — see loadAcsData
 
   // ── Gap analysis / weighted-scoring refs — hold latest data so sliders
   //    can recompute instantly without refetching from the backend.
@@ -376,8 +461,12 @@ export default function HealthMap() {
   useEffect(() => { radiusRef.current = radius; }, [radius]);
 
   const showToast = (msg, duration = 3000) => {
+    // One timer at a time: without this an earlier short toast's timer fires while
+    // a later long one is showing and blanks it early (e.g. a 3s "Switched year"
+    // clearing an 8s "Fetching from Census…" that is still in progress).
+    if (toastRef.current) clearTimeout(toastRef.current);
     setToast(msg);
-    setTimeout(() => setToast(""), duration);
+    toastRef.current = setTimeout(() => { setToast(""); toastRef.current = null; }, duration);
   };
 
   // ── Fetch FSF available years ──────────────────────────────────────────────
@@ -424,9 +513,20 @@ export default function HealthMap() {
         const res  = await fetch("/agencies.geojson");
         const data = await res.json();
         agenciesRef.current = data;
+        // recomputeGap bails out when agencies are not loaded yet, and it is only
+        // called from the ACS load and the sliders. If the ACS path finished first
+        // (slow FSF calls above, cold backend) nothing would ever recompute and the
+        // panel would sit at "No gaps found" until the user nudged a slider.
+        if (geojsonRef.current) {
+          recomputeGap(geojsonRef.current, agenciesRef.current, radiusRef.current);
+        }
       } catch { agenciesRef.current = { type: "FeatureCollection", features: [] }; }
     };
     init();
+    // recomputeGap is a useCallback with an empty dep array, so it is referentially
+    // stable for the life of the component; listing it here would not change when
+    // this run-once effect fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Apply weight sliders — recompute every tract's score, update the
@@ -444,17 +544,17 @@ export default function HealthMap() {
     });
     scoresRef.current = scores;
 
-    const q = jenksBreaks(validScores, 5);
+    const q = safeBreaks(validScores, 5);
     setBreaks(q);
 
     map.current.setPaintProperty("tracts-fill", "fill-color", [
       "step", ["coalesce", ["feature-state", "computed_score"], -1],
-      "#cccccc",
-      0,    "#5ec962",
-      q[0], "#21918c",
-      q[1], "#3b528b",
-      q[2], "#440154",
-      q[3], "#2d1160",
+      "#cccccc",              // no score (ineligible tract, or no data this year)
+      0,    SCORE_COLORS[0],
+      q[0], SCORE_COLORS[1],
+      q[1], SCORE_COLORS[2],
+      q[2], SCORE_COLORS[3],
+      q[3], SCORE_COLORS[4],
     ]);
   }, []);
 
@@ -481,11 +581,6 @@ export default function HealthMap() {
 
       const covered = agencyPoints.some(
         (a) => distanceMiles(lat, lng, a.lat, a.lng) <= r
-      );
-
-      map.current.setFeatureState(
-        { source: "tracts", id: props.GEOID },
-        { covered }
       );
 
       if (!covered) gaps.push({ ...props, _score: score });
@@ -516,14 +611,24 @@ export default function HealthMap() {
     if (!map.current) return;
     const source = map.current.getSource("tracts");
     if (!source) return;
+
+    // Every load claims a ticket. Two loads can be in flight at once (switch year
+    // twice, or a background fetch finishes after the user moved on), and whichever
+    // HTTP response lands last would otherwise paint last — showing one year's data
+    // under another year's label. Any load that is no longer the newest bails out.
+    const seq = ++loadSeqRef.current;
+    const isStale = () => seq !== loadSeqRef.current;
+
     try {
       const res = await fetch(`${API}/api/acs/tracts?acs_year=${year}`);
-      if (!res.ok) return;
+      if (!res.ok || isStale()) return;
       const apiData = await res.json();
       const lookup = {};
       apiData.forEach(t => { lookup[t.tract_id] = t; });
 
       const geojson = await (await fetch("/tracts_2022.geojson")).json();
+      if (isStale()) return;
+
       geojson.features.forEach(f => {
         const m = lookup[f.properties.GEOID];
         if (m) {
@@ -539,7 +644,13 @@ export default function HealthMap() {
           f.properties.unemployment_rate    = m.unemployment_rate        != null ? +Number(m.unemployment_rate).toFixed(1)        : null;
           f.properties.housing_cost_burden  = m.housing_cost_burden_pct  != null ? +Number(m.housing_cost_burden_pct).toFixed(1) : null;
         } else {
-          f.properties.need_score = null;
+          // tracts_2022.geojson ships a full set of baked-in indicator values from
+          // whenever build_geojson.py last ran. A tract absent from this year's API
+          // response must have ALL of them cleared, not just need_score — otherwise
+          // stale values of a different vintage get percentile-ranked alongside live
+          // ones and produce a real-looking score. Clearing total_pop also matters
+          // because isEligibleTract() reads it.
+          MERGED_TRACT_FIELDS.forEach(k => { f.properties[k] = null; });
         }
       });
 
@@ -551,7 +662,7 @@ export default function HealthMap() {
       // setData processes asynchronously in a web worker; applying feature states
       // before the tiles exist causes them to be silently dropped.
       map.current.once("idle", () => {
-        if (!map.current) return;
+        if (!map.current || isStale()) return;
         applyWeights(weightsRef.current, geojson);
         // Constant opacity — coverage is shown via the blue radius circles, so the
         // choropleth colors stay stable when the radius slider changes.
@@ -676,6 +787,9 @@ export default function HealthMap() {
         showToast(`✅ ACS ${year} data loaded`);
         return;
       }
+      // Switching year while a fetch is still in flight would otherwise orphan the
+      // previous poller — only the most recent one is ever cleared on unmount.
+      if (pollRef.current) clearInterval(pollRef.current);
       pollRef.current = setInterval(async () => {
         try {
           const sr   = await fetch(`${API}/api/acs/fetch-status?acs_year=${year}`);
@@ -702,6 +816,9 @@ export default function HealthMap() {
     setAcsYear(year);
     setSelected(null);
     if (map.current) map.current.setFilter("tracts-selected", ["==", "GEOID", ""]);
+    // Leaving a year whose fetch is still polling: stop that poller, or it will
+    // eventually report "done" and repaint the map with the year the user left.
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     if (acsStatus[year]?.status === "done") {
       await loadAcsData(year);
       showToast(`Switched to ACS ${year}`);
@@ -832,7 +949,16 @@ export default function HealthMap() {
     setSelectedIds(checked ? new Set(fsfHistory.map(b => b.id)) : new Set());
   };
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  // Unmount cleanup. /map is reached via client-side navigation from Home.jsx, so
+  // browser Back really unmounts this component. Without map.remove() the MapLibre
+  // instance keeps its WebGL context, worker pool and 5MB source alive, and its
+  // event handlers keep calling setState on a dead component. Browsers cap live
+  // WebGL contexts (~16 in Chrome), so enough Map↔Back cycles blank the map.
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (toastRef.current) clearTimeout(toastRef.current);
+    if (map.current) { map.current.remove(); map.current = null; }
+  }, []);
 
   // ── Radius slider change — recompute gaps without refetching ───────────────
   const handleRadiusChange = (r) => {
@@ -1241,7 +1367,7 @@ export default function HealthMap() {
                       Tract {tract.GEOID}
                     </div>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: scoreColor(tract._score), minWidth: 30, textAlign: "right" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: scoreColor(tract._score, breaks), minWidth: 30, textAlign: "right" }}>
                     {Math.round(tract._score)}
                   </div>
                 </button>
@@ -1713,7 +1839,7 @@ function IntroModal({ onClose }) {
         </Section>
 
         <Section title="Coverage gaps">
-          The left panel lists high-need tracts with <strong>no partner agency within the radius you set</strong> (0.1–5 mi).
+          The left panel lists high-need tracts with <strong>no partner agency within the radius you set</strong> (0.5–5 mi).
           Blue circles show each agency’s reach; tracts outside all circles are gaps.
         </Section>
 
@@ -1725,7 +1851,7 @@ function IntroModal({ onClose }) {
 
         <Section title="Data sources">
           Census ACS 5-year estimates · USDA Food Access Research Atlas (food-desert flags) · FSF distribution
-          uploads. Scores are relative within the 3-county region, not national.
+          uploads. Scores are relative within the 4-county region, not national.
         </Section>
 
         <button onClick={onClose} style={{
