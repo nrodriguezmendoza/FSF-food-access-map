@@ -24,17 +24,26 @@ IN_SCOPE_FIPS = {"12086", "12011", "12099", "12087"}
 @lru_cache(maxsize=1)
 def load_flags() -> dict[str, int]:
     """GEOID (11-digit str) → 0/1. Empty dict (never raises) if the file is
-    missing, so a fetch degrades gracefully instead of 500-ing."""
+    missing, so a fetch degrades gracefully instead of 500-ing.
+
+    Degrading silently would be worse than 500-ing, though: food_desert carries
+    18% of the need score, and an empty map makes every tract score 0 on that
+    term while still counting its weight — the whole distribution shifts down
+    with a map that still renders. lru_cache then pins the empty result for the
+    life of the process, so the warning below is the only signal you get.
+    """
     try:
         with open(FLAGS_PATH) as f:
             raw = json.load(f)
-        return {str(k).zfill(11): int(v) for k, v in raw.items()}
-    except (FileNotFoundError, ValueError):
+        flags = {str(k).zfill(11): int(v) for k, v in raw.items()}
+    except (OSError, ValueError) as e:  # ValueError ⊃ JSONDecodeError
+        print(f"[food_desert] WARNING: could not load {FLAGS_PATH} ({e}). "
+              f"Every tract will score 0 on food_desert (18% of the need score).",
+              flush=True)
         return {}
-
-
-def flag_for(geoid: str, default: int = 0) -> int:
-    return load_flags().get(str(geoid).zfill(11), default)
+    if not flags:
+        print(f"[food_desert] WARNING: {FLAGS_PATH} is empty.", flush=True)
+    return flags
 
 
 # ── Offline build / DB sink (needs geo/ assets, run locally only) ──────────────
