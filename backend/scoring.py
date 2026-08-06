@@ -52,15 +52,10 @@ def normalize_zip(zip_code) -> str:
 
 
 # ── County normalization (canonical Title Case) ────────────────────────────────
-# One definition, includes Monroe. FIPS county prefix → canonical name.
-COUNTY_BY_FIPS: dict[str, str] = {
-    "12086": "Miami-Dade",
-    "12011": "Broward",
-    "12099": "Palm Beach",
-    "12087": "Monroe",
-}
-
-
+# The four counties FSF serves: Miami-Dade (12086), Broward (12011),
+# Palm Beach (12099), Monroe (12087). The FIPS-prefix → name lookup lives in the
+# frontend (src/lib/counties.js), which is the only side that resolves a county
+# from a tract GEOID; the backend only ever normalizes free-text county names.
 def normalize_county(name: str | None) -> str:
     """Fuzzy county-name → canonical Title Case, or "" if unrecognized."""
     if not name:
@@ -75,11 +70,6 @@ def normalize_county(name: str | None) -> str:
     if "monroe" in n:
         return "Monroe"
     return ""
-
-
-def county_from_geoid(geoid: str) -> str:
-    """11-digit tract GEOID → canonical county name (via 5-char FIPS prefix)."""
-    return COUNTY_BY_FIPS.get(str(geoid)[:5], "")
 
 
 # ── FSF impact score (0-100) ───────────────────────────────────────────────────
@@ -106,7 +96,7 @@ def impact_score(individuals_served: float, meals_served: float, population: flo
 # is used directly as its own normalized term rather than being percentile-ranked.
 #
 # Weights match the frontend DEFAULT_WEIGHTS so the stored baseline need_score
-# agrees with the map's default view. food_desert IS included here (20%) — a
+# agrees with the map's default view. food_desert IS included here (18%) — a
 # tract's low-income/low-access status is part of its need, not just a display flag.
 NEED_INDICATORS: dict[str, dict] = {
     "pct_below_poverty":       {"weight": 0.25, "invert": False, "binary": False},
