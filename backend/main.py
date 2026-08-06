@@ -1,7 +1,8 @@
 import os
 import io
+import math
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -34,6 +35,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# A fetch runs on a daemon thread. If the process dies mid-fetch (Render free-tier
+# spin-down, a deploy's SIGTERM, an OOM) the thread never reaches its except block,
+# so the deliberately-durable job row stays "fetching" forever — and every later
+# fetch, even force=true, short-circuits on it. updated_at is what makes that
+# recoverable, so it must be written on every transition.
+FETCH_JOB_STALE_AFTER = timedelta(minutes=15)
+
+
+def _fetch_job_is_stale(job: AcsFetchJob) -> bool:
+    """True when a "fetching" row is old enough that its worker is certainly gone."""
+    if job.updated_at is None:
+        return True
+    updated = job.updated_at
+    if updated.tzinfo is None:            # rows written before the tz-aware switch
+        updated = updated.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - updated > FETCH_JOB_STALE_AFTER
+
+
 def _set_fetch_job(db: Session, year: int, status: str, message: str = "", tracts: int = 0):
     """Upsert the DB-backed fetch-status row (survives restarts / multi-worker)."""
     job = db.query(AcsFetchJob).filter(AcsFetchJob.acs_year == year).first()
@@ -41,7 +60,7 @@ def _set_fetch_job(db: Session, year: int, status: str, message: str = "", tract
         job = AcsFetchJob(acs_year=year)
         db.add(job)
     job.status, job.message, job.tracts = status, message, tracts
-    job.updated_at = datetime.utcnow()
+    job.updated_at = datetime.now(timezone.utc)
     db.commit()
 
 
@@ -54,16 +73,24 @@ def get_db():
 
 
 def safe_float(row, key, default=0.0):
+    """Float, or None when the value is missing/non-finite.
+
+    NaN must not be returned: bool(nan) is True so `nan or default` yields nan,
+    and Postgres then stores a literal 'NaN'::float8 (SQLite coerces to NULL — so
+    dev and prod would disagree for the same input). A stored NaN poisons any
+    later SQL AVG() over the column. None keeps "unknown" honest and distinct
+    from a real measured 0.0.
+    """
     try:
-        return float(row.get(key, default) or default)
+        v = float(row.get(key, default) or default)
     except (ValueError, TypeError):
         return default
+    return v if math.isfinite(v) else None
 
 
 def _clean(v):
     """Return None for NaN/Inf so JSON serialization doesn't blow up."""
-    import math
-    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+    if isinstance(v, float) and not math.isfinite(v):
         return None
     return v
 
@@ -155,7 +182,14 @@ def _do_acs_fetch(year: int):
         _set_fetch_job(db, year, "done", f"ACS {year} loaded — {len(df)} tracts", len(df))
     except Exception as e:
         db.rollback()
-        _set_fetch_job(db, year, "error", str(e))
+        # If the original failure was the database itself, this commit fails too.
+        # Letting that escape would kill the thread with the row still "fetching",
+        # which is exactly the stuck state FETCH_JOB_STALE_AFTER exists to unwind —
+        # but recovering in 15 minutes is much worse than recording the error now.
+        try:
+            _set_fetch_job(db, year, "error", str(e))
+        except Exception as inner:
+            print(f"[acs-fetch] could not record error for {year}: {inner}", flush=True)
     finally:
         db.close()
 
@@ -180,7 +214,7 @@ def trigger_acs_fetch(acs_year: int = Query(2024), force: bool = Query(False),
         )
 
     job = db.query(AcsFetchJob).filter(AcsFetchJob.acs_year == acs_year).first()
-    if job and job.status == "fetching":
+    if job and job.status == "fetching" and not _fetch_job_is_stale(job):
         return {"message": f"Already fetching ACS {acs_year}...", "cached": False}
 
     if not force:
@@ -276,7 +310,29 @@ def delete_acs_batch(batch_id: int, db: Session = Depends(get_db)):
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     db.query(ACSRecord).filter(ACSRecord.upload_batch_id == batch_id).delete()
+    was_active, year = batch.status == "active", batch.acs_year
     db.delete(batch)
+
+    # Deleting the active batch leaves the year with no data. The fetch-status
+    # endpoint answers from the job row first, so without this it keeps reporting
+    # "done" while /api/acs/tracts 404s — and the frontend swallows that 404 and
+    # renders nothing, with no error. Promote the newest archived batch if there
+    # is one; otherwise drop the job row so the year reads as genuinely unloaded.
+    if was_active:
+        fallback = db.query(UploadBatch).filter(
+            UploadBatch.acs_year == year,
+            UploadBatch.status == "archived",
+        ).order_by(UploadBatch.id.desc()).first()
+        if fallback:
+            fallback.status = "active"
+            _set_fetch_job(db, year, "done",
+                           f"ACS {year} loaded — {fallback.row_count or 0} tracts",
+                           fallback.row_count or 0)
+        else:
+            job = db.query(AcsFetchJob).filter(AcsFetchJob.acs_year == year).first()
+            if job:
+                db.delete(job)
+
     db.commit()
     return {"message": f"ACS batch {batch_id} deleted"}
 
