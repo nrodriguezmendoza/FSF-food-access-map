@@ -1,4 +1,6 @@
 import os
+import time
+
 import requests
 import pandas as pd
 from dotenv import load_dotenv
@@ -20,10 +22,26 @@ COUNTIES = {
 
 # The 10 "30 percent or more" lines of B25106 (5 owner + 5 renter income
 # brackets) — households spending 30%+ of income on housing. Summed for the
-# cost-burden rate. Denominator is B25106_001E (all households).
+# cost-burden numerator.
 HOUSING_BURDEN_CODES = [
     "B25106_006E", "B25106_010E", "B25106_014E", "B25106_018E", "B25106_022E",  # owner
     "B25106_028E", "B25106_032E", "B25106_036E", "B25106_040E", "B25106_044E",  # renter
+]
+
+# B25106 has three categories for which no cost-to-income ratio is computed, so
+# they can never appear in the numerator above: owner and renter households with
+# zero or negative income, and renters paying no cash rent. They ARE inside the
+# B25106_001E total, so dividing by that total understates the burden rate.
+# HUD's standard treatment removes them from the denominator.
+#
+# Measured on 2022 Miami-Dade tracts: they are 3.2% of the denominator on average
+# (19.3% max), understating the rate by 1.6pp on average and up to 10.5pp — and
+# the bias is concentrated in exactly the tracts this tool exists to find
+# (5.1% of the denominator in tracts above 30% poverty vs 2.3% below 10%).
+HOUSING_UNCOMPUTED_CODES = [
+    "B25106_023E",  # owner occupied, zero or negative income
+    "B25106_045E",  # renter occupied, zero or negative income
+    "B25106_046E",  # renter occupied, no cash rent
 ]
 
 # Raw ACS variable codes -> readable names
@@ -39,8 +57,9 @@ VARIABLES = {
     "B01003_001E": "total_pop",         # total population
     "B23025_003E": "labor_force",       # civilian labor force
     "B23025_005E": "unemployed",        # unemployed (civilian labor force)
-    "B25106_001E": "housing_total",     # all households (cost-burden denominator)
+    "B25106_001E": "housing_total",     # all households (cost-burden universe)
     **{code: f"hb_{i}" for i, code in enumerate(HOUSING_BURDEN_CODES)},
+    **{code: f"hbx_{i}" for i, code in enumerate(HOUSING_UNCOMPUTED_CODES)},
 }
 
 def fetch_county(county_fips):
@@ -103,6 +122,38 @@ def main():
     print("\nSample rows:")
     print(out.head())
 
+# (connect, read) seconds. Without a timeout requests blocks on recv() forever;
+# because the runtime fetch runs on a background thread, a single hung socket
+# leaves the acs_fetch_jobs row stuck at "fetching" for the life of the process.
+CENSUS_TIMEOUT = (10, 120)
+CENSUS_RETRIES = 3
+CENSUS_BACKOFF = 2.0
+
+
+def _census_get(url: str, params: dict) -> list:
+    """GET + parse a Census API response, retrying transient failures.
+
+    The API intermittently returns HTTP 200 with a non-JSON body, which
+    raise_for_status() cannot catch — resp.json() then raises and, with four
+    sequential county requests per fetch, the chance that at least one call
+    flakes is roughly 4x the single-call rate. Retrying makes it a non-event.
+    """
+    last = None
+    for attempt in range(1, CENSUS_RETRIES + 1):
+        try:
+            resp = requests.get(url, params=params, timeout=CENSUS_TIMEOUT)
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.RequestException, ValueError) as e:  # ValueError ⊃ JSONDecodeError
+            last = e
+            if attempt < CENSUS_RETRIES:
+                wait = CENSUS_BACKOFF * attempt
+                print(f"  Census request failed ({type(e).__name__}: {e}); "
+                      f"retry {attempt}/{CENSUS_RETRIES - 1} in {wait:.0f}s")
+                time.sleep(wait)
+    raise RuntimeError(f"Census API failed after {CENSUS_RETRIES} attempts: {last}") from last
+
+
 def fetch_acs_data(year: int, api_key: str) -> pd.DataFrame:
     """Entry point called by main.py — supports dynamic year and api_key."""
     import numpy as np
@@ -116,9 +167,7 @@ def fetch_acs_data(year: int, api_key: str) -> pd.DataFrame:
             "in": f"state:{STATE} county:{fips}",
             "key": api_key,
         }
-        resp = requests.get(base_url, params=params)
-        resp.raise_for_status()
-        rows = resp.json()
+        rows = _census_get(base_url, params)
         frame = pd.DataFrame(rows[1:], columns=rows[0])
         frame["county_label"] = county_name
         frames.append(frame)
@@ -135,20 +184,29 @@ def fetch_acs_data(year: int, api_key: str) -> pd.DataFrame:
     df["pct_snap_enrollment"] = df["snap_yes"] / df["snap_total"] * 100
     df["pct_no_vehicle"]    = (df["owner_no_veh"] + df["renter_no_veh"]) / df["veh_total"] * 100
     df["unemployment_rate"] = df["unemployed"] / df["labor_force"] * 100
-    hb_cols = [f"hb_{i}" for i in range(len(HOUSING_BURDEN_CODES))]
-    df["housing_cost_burden_pct"] = df[hb_cols].sum(axis=1) / df["housing_total"] * 100
+    hb_cols  = [f"hb_{i}"  for i in range(len(HOUSING_BURDEN_CODES))]
+    hbx_cols = [f"hbx_{i}" for i in range(len(HOUSING_UNCOMPUTED_CODES))]
+    # Exclude households whose cost ratio ACS never computes — see
+    # HOUSING_UNCOMPUTED_CODES. Guard the result: on a tract where every household
+    # falls into those categories the denominator is 0, handled by the isfinite
+    # sweep below.
+    housing_denom = df["housing_total"] - df[hbx_cols].sum(axis=1)
+    df["housing_cost_burden_pct"] = df[hb_cols].sum(axis=1) / housing_denom * 100
 
     # Divide-by-zero (empty tracts) → inf; treat as missing.
     for col in ["pct_below_poverty", "pct_snap_enrollment", "pct_no_vehicle",
                 "unemployment_rate", "housing_cost_burden_pct"]:
         df.loc[~np.isfinite(df[col]), col] = np.nan
 
-    # Columns expected downstream that ACS5 doesn't supply — default to 0.
+    # Columns the ACSRecord table has but this pull does not populate. They are
+    # written as NULL, never 0.0 — a stored 0.0 is indistinguishable from a real
+    # measured zero, which would quietly mislead anyone who adds a slider for one
+    # of these or writes a SQL rollup over them.
     # NOTE: need_score is intentionally NOT set here — it is computed by
     # scoring.compute_need_scores() in main.py after the food_desert flag is
     # attached, so the stored score is real (not a placeholder 0).
     for col in ["pct_low_income", "pct_children_under18", "pct_seniors_65plus"]:
-        df[col] = 0.0
+        df[col] = np.nan
 
     return df[[
         "tract_id", "county_label", "total_pop", "median_income",
